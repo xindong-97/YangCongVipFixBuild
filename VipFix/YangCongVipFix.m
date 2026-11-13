@@ -232,6 +232,37 @@ static void yc_storeAddressList(id resp) {
     }
 }
 
+static void yc_diagLog(NSString *msg) {
+    static NSString *path = nil;
+    static NSObject *lock = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{
+        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *doc = [dirs firstObject];
+        path = [[doc stringByAppendingPathComponent:@"YangCongVipFix_diag.txt"] retain];
+        lock = [[NSObject alloc] init];
+    });
+    @synchronized (lock) {
+        NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        } else {
+            [fh seekToEndOfFile];
+            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+    }
+}
+
+static NSUInteger yc_tableCount(void) {
+    NSUInteger n = 0;
+    @synchronized (yc_videoAddrs) {
+        n = yc_videoAddrs.count;
+    }
+    return n;
+}
+
 static void yc_prefetchSpecialCourses(NSString *token) {
     NSMutableArray *courses = [NSMutableArray array];
     NSArray *known = @[
@@ -290,6 +321,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id chapter = yc_fetchJSON(url, token, 8);
         if (chapter) yc_collectVideoIds(chapter, allVids);
     }
+    yc_diagLog([NSString stringWithFormat:@"special chapters done rawVids=%lu", (unsigned long)allVids.count]);
     NSMutableArray *uniq = [NSMutableArray array];
     NSMutableSet *seen = [NSMutableSet set];
     for (NSString *vid in allVids) {
@@ -299,6 +331,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         }
     }
     NSUInteger total = uniq.count;
+    yc_diagLog([NSString stringWithFormat:@"special uniqVids=%lu", (unsigned long)total]);
     NSUInteger chunk = 500;
     for (NSUInteger start = 0; start < total; start += chunk) {
         NSRange range = NSMakeRange(start, MIN(chunk, total - start));
@@ -309,6 +342,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
         yc_storeAddressList(resp);
         yc_saveCache();
+        yc_diagLog([NSString stringWithFormat:@"special batch %lu table=%lu", (unsigned long)start, (unsigned long)yc_tableCount()]);
     }
     yc_saveCache();
 }
@@ -322,6 +356,7 @@ static void yc_warmUp(void) {
         @autoreleasepool {
             NSString *token = yc_getToken();
             if (token.length == 0) {
+                yc_diagLog([NSString stringWithFormat:@"warmUp tokenEmpty retry=%d", yc_warmRetryCount]);
                 @synchronized (yc_videoAddrs) {
                     yc_warmStarted = NO;
                 }
@@ -333,6 +368,7 @@ static void yc_warmUp(void) {
                 }
                 return;
             }
+            yc_diagLog([NSString stringWithFormat:@"warmUp tokenLen=%lu", (unsigned long)token.length]);
             dispatch_group_t g = dispatch_group_create();
             dispatch_group_enter(g);
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -358,6 +394,7 @@ static void yc_warmUp(void) {
                 yc_warmDone = YES;
                 [yc_notFoundIds removeAllObjects];
             }
+            yc_diagLog([NSString stringWithFormat:@"warmUp done table=%lu", (unsigned long)yc_tableCount()]);
             yc_saveCache();
         }
     });
@@ -366,13 +403,26 @@ static void yc_warmUp(void) {
 static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     NSDictionary *body = @{@"videoList": @[@{@"videoId": videoId}]};
     id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 10);
-    if (![resp isKindOfClass:[NSDictionary class]]) return nil;
+    if (![resp isKindOfClass:[NSDictionary class]]) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ respNil", videoId]);
+        return nil;
+    }
     NSArray *list = resp[@"videoList"];
-    if (![list isKindOfClass:[NSArray class]] || list.count == 0) return nil;
+    if (![list isKindOfClass:[NSArray class]] || list.count == 0) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ listEmpty", videoId]);
+        return nil;
+    }
     id first = list[0];
-    if (![first isKindOfClass:[NSDictionary class]]) return nil;
+    if (![first isKindOfClass:[NSDictionary class]]) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ itemBad", videoId]);
+        return nil;
+    }
     NSArray *addrs = first[@"address"];
-    if (![addrs isKindOfClass:[NSArray class]] || addrs.count == 0) return nil;
+    if (![addrs isKindOfClass:[NSArray class]] || addrs.count == 0) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ addrEmpty", videoId]);
+        return nil;
+    }
+    yc_diagLog([NSString stringWithFormat:@"sync %@ OK addrs=%lu", videoId, (unsigned long)addrs.count]);
     @synchronized (yc_videoAddrs) {
         yc_videoAddrs[videoId] = addrs;
     }
@@ -387,7 +437,10 @@ static NSArray *yc_resolveSync(NSString *videoId) {
         if ([yc_notFoundIds containsObject:videoId]) return nil;
     }
     NSString *token = yc_getToken();
-    if (token.length == 0) return nil;
+    if (token.length == 0) {
+        yc_diagLog([NSString stringWithFormat:@"resolve %@ noToken", videoId]);
+        return nil;
+    }
     BOOL warmDone = NO;
     @synchronized (yc_videoAddrs) {
         warmDone = yc_warmDone;
@@ -511,7 +564,12 @@ static NSArray *yc_lookupAddrs(NSString *vid) {
         @synchronized (yc_videoAddrs) {
             addrs = yc_videoAddrs[vid];
         }
-        if (!addrs) addrs = yc_resolveSync(vid);
+        if (addrs) {
+            yc_diagLog([NSString stringWithFormat:@"lookup %@ tableHit addrs=%lu", vid, (unsigned long)addrs.count]);
+        } else {
+            addrs = yc_resolveSync(vid);
+            yc_diagLog([NSString stringWithFormat:@"lookup %@ syncResult=%@", vid, addrs ? [NSString stringWithFormat:@"OK addrs=%lu", (unsigned long)addrs.count] : @"FAIL"]);
+        }
     }
     return addrs;
 }
@@ -896,12 +954,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v24 loaded");
+    NSLog(@"[YangCongVipFix] v25diag loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
+    yc_diagLog([NSString stringWithFormat:@"loaded v25diag cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
