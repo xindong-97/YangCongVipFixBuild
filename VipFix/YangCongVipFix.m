@@ -69,12 +69,16 @@ static NSData *yc_fetchSync(NSString *urlStr, NSString *token, NSTimeInterval ti
     if (!url || token.length == 0) return nil;
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     [req setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+    [NSURLProtocol setProperty:[NSNumber numberWithBool:YES] forKey:@"YCIntercepted" inRequest:req];
     req.timeoutInterval = timeout;
     __block NSData *out = nil;
     __block BOOL done = NO;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         if (d) out = [d retain];
+        NSInteger st = 0;
+        if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
+        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"fetch %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -100,12 +104,16 @@ static id yc_postJSONSync(NSString *urlStr, NSDictionary *body, NSString *token,
     [req setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [req setHTTPBody:bodyData];
+    [NSURLProtocol setProperty:[NSNumber numberWithBool:YES] forKey:@"YCIntercepted" inRequest:req];
     req.timeoutInterval = timeout;
     __block NSData *out = nil;
     __block BOOL done = NO;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         if (d) out = [d retain];
+        NSInteger st = 0;
+        if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
+        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"post %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -954,13 +962,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v25diag loaded");
+    NSLog(@"[YangCongVipFix] v26 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v25diag cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v26 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
