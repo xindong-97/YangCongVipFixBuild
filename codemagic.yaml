@@ -1,7 +1,7 @@
 workflows:
   build-vipfix:
     name: Build YangCongVipFix
-    instance_type: mac_mini
+    instance_type: mac_mini_m2
     max_build_duration: 20
     environment:
       xcode: latest
