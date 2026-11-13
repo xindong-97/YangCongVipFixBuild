@@ -1,0 +1,21 @@
+workflows:
+  build-vipfix:
+    name: Build YangCongVipFix
+    instance_type: mac_mini
+    max_build_duration: 20
+    environment:
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Build dylib
+        script: |
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -o YangCongVipFix.dylib VipFix/YangCongVipFix.m
+          ls -lh YangCongVipFix.dylib
+          file YangCongVipFix.dylib
+    artifacts:
+      - YangCongVipFix.dylib
