@@ -1,0 +1,34 @@
+name: Build YangCongVipFix
+on:
+  push:
+    branches: [main]
+    paths: ['VipFix/**', '.github/workflows/vipfix.yml']
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dylib
+        run: |
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -o VipFix/YangCongVipFix.dylib VipFix/YangCongVipFix.m
+          ls -lh VipFix/YangCongVipFix.dylib
+          file VipFix/YangCongVipFix.dylib
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: YangCongVipFix
+          path: VipFix/YangCongVipFix.dylib
+      - name: Publish dylib to repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p VipFix/releases
+          cp VipFix/YangCongVipFix.dylib VipFix/releases/YangCongVipFix.dylib
+          git config user.name "ci-build"
+          git config user.email "ci-build@local"
+          git add VipFix/releases/YangCongVipFix.dylib
+          git commit -m "build: publish dylib [skip ci]" || exit 0
+          git push origin HEAD:main
