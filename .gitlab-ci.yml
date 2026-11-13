@@ -1,0 +1,12 @@
+build-vipfix:
+  tags:
+    - saas-macos-medium-m1
+  image: macos-26-xcode-26
+  script:
+    - xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -o YangCongVipFix.dylib VipFix/YangCongVipFix.m
+    - ls -lh YangCongVipFix.dylib
+    - file YangCongVipFix.dylib
+  artifacts:
+    paths:
+      - YangCongVipFix.dylib
+    expire_in: 1 week
