@@ -2,6 +2,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+static void yc_diagLog(NSString *msg);
+
 static void yc_void_noop(id self, SEL _cmd) {}
 static BOOL yc_bool_yes(id self, SEL _cmd) { return YES; }
 static BOOL yc_bool_no(id self, SEL _cmd) { return NO; }
