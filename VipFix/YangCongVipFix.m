@@ -912,33 +912,36 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     if ([NSURLProtocol propertyForKey:@"YCIntercepted" inRequest:request]) return NO;
     NSString *host = request.URL.host;
-    if (![host isEqualToString:@"7to12.yangcong345.com"]) return NO;
-    NSString *auth = [request valueForHTTPHeaderField:@"Authorization"];
-    if ([auth hasPrefix:@"Bearer "]) {
-        NSString *tok = [auth substringFromIndex:7];
-        if (tok.length > 0) {
-            BOOL isNew = NO;
-            @synchronized (yc_videoAddrs) {
-                if (![tok isEqualToString:yc_capturedToken]) {
-                    [yc_capturedToken release];
-                    yc_capturedToken = [tok copy];
-                    isNew = YES;
+    BOOL isApiHost = [host isEqualToString:@"7to12.yangcong345.com"] || [host isEqualToString:@"ios-api-v5-0.yangcong345.com"] || [host isEqualToString:@"school-api.yangcong345.com"];
+    if (isApiHost) {
+        NSString *auth = [request valueForHTTPHeaderField:@"Authorization"];
+        if ([auth hasPrefix:@"Bearer "]) {
+            NSString *tok = [auth substringFromIndex:7];
+            if (tok.length > 0) {
+                BOOL isNew = NO;
+                @synchronized (yc_videoAddrs) {
+                    if (![tok isEqualToString:yc_capturedToken]) {
+                        [yc_capturedToken release];
+                        yc_capturedToken = [tok copy];
+                        isNew = YES;
+                    }
                 }
-            }
-            if (isNew) {
-                yc_diagLog(@"captured token from app request");
-                if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
-                    yc_specialRetried = YES;
-                    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                        @autoreleasepool {
-                            NSString *t = yc_getToken();
-                            if (t.length > 0) yc_prefetchSpecialCourses(t);
-                        }
-                    });
+                if (isNew) {
+                    yc_diagLog(@"captured token from app request");
+                    if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
+                        yc_specialRetried = YES;
+                        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                            @autoreleasepool {
+                                NSString *t = yc_getToken();
+                                if (t.length > 0) yc_prefetchSpecialCourses(t);
+                            }
+                        });
+                    }
                 }
             }
         }
     }
+    if (![host isEqualToString:@"7to12.yangcong345.com"]) return NO;
     NSString *path = request.URL.path;
     if ([path hasPrefix:@"/backend/study-practice/examination"]) return YES;
     if ([path isEqualToString:@"/backend/api/client/userAuth"]) return YES;
@@ -997,13 +1000,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v27 loaded");
+    NSLog(@"[YangCongVipFix] v28 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v27 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v28 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
