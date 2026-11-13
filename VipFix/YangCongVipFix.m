@@ -3,6 +3,7 @@
 #import <objc/message.h>
 
 static void yc_diagLog(NSString *msg);
+static NSUInteger yc_tableCount(void);
 
 static void yc_void_noop(id self, SEL _cmd) {}
 static BOOL yc_bool_yes(id self, SEL _cmd) { return YES; }
@@ -284,7 +285,7 @@ static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
     yc_diagLog([NSString stringWithFormat:@"dynamic prefetch done table=%lu", (unsigned long)yc_tableCount()]);
 }
 
-static NSComparisonResult yc_hlsAddrCompare(id a, id b) {
+static NSComparisonResult yc_hlsAddrCompare(id a, id b, void *context) {
     NSDictionary *da = [a isKindOfClass:[NSDictionary class]] ? a : nil;
     NSDictionary *db = [b isKindOfClass:[NSDictionary class]] ? b : nil;
     NSString *ca = [[da[@"clarity"] description] lowercaseString];
@@ -316,7 +317,7 @@ static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
         [hls addObject:a];
     }
     if (hls.count == 0) return addrs;
-    [hls sortUsingFunction:(NSComparisonResult (*)(id, id, void *))yc_hlsAddrCompare context:NULL];
+    [hls sortUsingFunction:yc_hlsAddrCompare context:NULL];
     return hls;
 }
 
