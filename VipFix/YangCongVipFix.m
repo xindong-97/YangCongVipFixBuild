@@ -234,6 +234,30 @@ static void yc_storeAddressList(id resp) {
 
 static void yc_prefetchSpecialCourses(NSString *token) {
     NSMutableArray *courses = [NSMutableArray array];
+    NSArray *known = @[
+        @{@"id": @"a820e7f0-4774-11ec-99c2-7367123a3632", @"courseType": @"total_review_package"},
+        @{@"id": @"1c055db0-478c-11ec-8692-833186e50566", @"courseType": @"total_review_package"},
+        @{@"id": @"fbcac940-478b-11ec-a589-e52a584942a3", @"courseType": @"total_review_package"},
+        @{@"id": @"3927c350-45e4-11ec-8692-833186e50566", @"courseType": @"total_review_package"},
+        @{@"id": @"03591030-481e-11ec-8229-df3407f9a8df", @"courseType": @"total_review_package"},
+        @{@"id": @"62b45180-45e3-11ec-8692-833186e50566", @"courseType": @"total_review_package"},
+        @{@"id": @"777c4f0e-5c16-11ed-ba0c-ba0ab9872e3a", @"courseType": @"total_review_package"},
+        @{@"id": @"9b9a46b0-478e-11ec-8692-833186e50566", @"courseType": @"total_review_package"},
+        @{@"id": @"11f3faf6-75fd-11ed-a6cc-ea3c33132486", @"courseType": @"total_review_package"},
+        @{@"id": @"b7be155c-45a4-11f0-b491-dae869946e39", @"courseType": @"total_review_package"},
+        @{@"id": @"4dc1e91e-f4d0-11ef-9fd7-9a1daf04f3fb", @"courseType": @"new_problem_type"},
+        @{@"id": @"1caa6bab-0146-11ef-9272-1ad70eaae358", @"courseType": @"new_problem_type"},
+        @{@"id": @"0c650748-02bd-11ef-84d1-aea51e33dbea", @"courseType": @"new_problem_type"},
+        @{@"id": @"260674bf-3456-11ef-9e4a-8e9d59d085aa", @"courseType": @"new_problem_type"},
+        @{@"id": @"65a12f78-0159-11ef-8577-9e782df4fecc", @"courseType": @"new_problem_type"},
+        @{@"id": @"b0400f23-a222-11ef-88f9-16aad193f435", @"courseType": @"new_problem_type"},
+        @{@"id": @"91d9b5a5-a222-11ef-a527-c6630ade03df", @"courseType": @"new_problem_type"},
+        @{@"id": @"597e750f-893e-11f0-8d5d-e69bcf52e7b7", @"courseType": @"new_problem_type"},
+        @{@"id": @"8c52c86a-893c-11f0-8d5d-e69bcf52e7b7", @"courseType": @"new_problem_type"},
+        @{@"id": @"cc519e90-88b1-11f0-a820-e62dc3581e44", @"courseType": @"new_problem_type"},
+        @{@"id": @"103b8d79-88aa-11f0-a820-e62dc3581e44", @"courseType": @"new_problem_type"},
+    ];
+    [courses addObjectsFromArray:known];
     for (NSNumber *stage in @[@1, @2, @3]) {
         NSString *url = [NSString stringWithFormat:@"https://7to12.yangcong345.com/backend/study-course/totalReview/courseList/v2?stageId=%@&courseType=total_review_package", stage];
         id resp = yc_fetchJSON(url, token, 8);
@@ -284,6 +308,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         NSDictionary *body = @{@"videoList": list};
         id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
         yc_storeAddressList(resp);
+        yc_saveCache();
     }
     yc_saveCache();
 }
@@ -308,6 +333,14 @@ static void yc_warmUp(void) {
                 }
                 return;
             }
+            dispatch_group_t g = dispatch_group_create();
+            dispatch_group_enter(g);
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                @autoreleasepool {
+                    yc_prefetchSpecialCourses(token);
+                }
+                dispatch_group_leave(g);
+            });
             NSArray *ids = yc_themeIdsForToken(token);
             NSOperationQueue *q = [[NSOperationQueue alloc] init];
             q.maxConcurrentOperationCount = 16;
@@ -320,9 +353,10 @@ static void yc_warmUp(void) {
             }
             [q waitUntilAllOperationsAreFinished];
             [q release];
-            yc_prefetchSpecialCourses(token);
+            dispatch_group_wait(g, DISPATCH_TIME_FOREVER);
             @synchronized (yc_videoAddrs) {
                 yc_warmDone = YES;
+                [yc_notFoundIds removeAllObjects];
             }
             yc_saveCache();
         }
@@ -331,7 +365,7 @@ static void yc_warmUp(void) {
 
 static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     NSDictionary *body = @{@"videoList": @[@{@"videoId": videoId}]};
-    id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 3);
+    id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 10);
     if (![resp isKindOfClass:[NSDictionary class]]) return nil;
     NSArray *list = resp[@"videoList"];
     if (![list isKindOfClass:[NSArray class]] || list.count == 0) return nil;
@@ -862,7 +896,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v23 loaded");
+    NSLog(@"[YangCongVipFix] v24 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
