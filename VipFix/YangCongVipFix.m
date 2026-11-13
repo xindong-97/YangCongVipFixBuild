@@ -66,6 +66,15 @@ static NSString *yc_getToken(void) {
         [inst release];
         return nil;
     }
+    if ([tok hasPrefix:@"Bearer "]) {
+        tok = [tok substringFromIndex:7];
+        yc_diagLog(@"stripped Bearer prefix from token");
+    }
+    tok = [tok stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (tok.length == 0) {
+        [inst release];
+        return nil;
+    }
     tok = [[tok copy] autorelease];
     [inst release];
     return tok;
@@ -922,8 +931,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     if ([NSURLProtocol propertyForKey:@"YCIntercepted" inRequest:request]) return NO;
     NSString *host = request.URL.host;
-    BOOL isApiHost = [host isEqualToString:@"7to12.yangcong345.com"] || [host isEqualToString:@"ios-api-v5-0.yangcong345.com"] || [host isEqualToString:@"school-api.yangcong345.com"];
-    if (isApiHost) {
+    if ([host isEqualToString:@"7to12.yangcong345.com"]) {
         NSString *auth = [request valueForHTTPHeaderField:@"Authorization"];
         if ([auth hasPrefix:@"Bearer "]) {
             NSString *tok = [auth substringFromIndex:7];
@@ -937,7 +945,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
                     }
                 }
                 if (isNew) {
-                    yc_diagLog([NSString stringWithFormat:@"captured token from app request len=%lu", (unsigned long)tok.length]);
+                    yc_diagLog([NSString stringWithFormat:@"captured token from 7to12 len=%lu", (unsigned long)tok.length]);
                     if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
                         yc_specialRetried = YES;
                         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -1010,13 +1018,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v29 loaded");
+    NSLog(@"[YangCongVipFix] v30 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v29 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v30 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
