@@ -290,22 +290,21 @@ static NSComparisonResult yc_hlsAddrCompare(id a, id b, void *context) {
     NSDictionary *db = [b isKindOfClass:[NSDictionary class]] ? b : nil;
     NSString *ca = [[da[@"clarity"] description] lowercaseString];
     NSString *cb = [[db[@"clarity"] description] lowercaseString];
-    BOOL fa = [ca isEqualToString:@"fullhigh"];
-    BOOL fb = [cb isEqualToString:@"fullhigh"];
-    if (fa != fb) return fa ? NSOrderedDescending : NSOrderedAscending;
+    NSUInteger ra = 4, rb = 4;
+    if ([ca isEqualToString:@"low"]) ra = 0;
+    else if ([ca isEqualToString:@"middle"]) ra = 1;
+    else if ([ca isEqualToString:@"high"]) ra = 2;
+    else if ([ca isEqualToString:@"fullhigh"]) ra = 3;
+    if ([cb isEqualToString:@"low"]) rb = 0;
+    else if ([cb isEqualToString:@"middle"]) rb = 1;
+    else if ([cb isEqualToString:@"high"]) rb = 2;
+    else if ([cb isEqualToString:@"fullhigh"]) rb = 3;
+    if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
     NSString *pa = [[da[@"platform"] description] lowercaseString];
     NSString *pb = [[db[@"platform"] description] lowercaseString];
     BOOL ma = [pa isEqualToString:@"mobile"];
     BOOL mb = [pb isEqualToString:@"mobile"];
-    if (ma != mb) return ma ? NSOrderedDescending : NSOrderedAscending;
-    NSUInteger ra = 2, rb = 2;
-    if ([ca isEqualToString:@"high"]) ra = 0;
-    else if ([ca isEqualToString:@"middle"]) ra = 1;
-    else if ([ca isEqualToString:@"low"]) ra = 2;
-    if ([cb isEqualToString:@"high"]) rb = 0;
-    else if ([cb isEqualToString:@"middle"]) rb = 1;
-    else if ([cb isEqualToString:@"low"]) rb = 2;
-    if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
+    if (ma != mb) return ma ? NSOrderedAscending : NSOrderedDescending;
     return NSOrderedSame;
 }
 
@@ -503,7 +502,11 @@ static void yc_warmUp(void) {
 
 static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     NSDictionary *body = @{@"videoList": @[@{@"videoId": videoId}]};
-    id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
+    id resp = nil;
+    for (int attempt = 0; attempt < 3 && !resp; attempt++) {
+        resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
+        if (!resp) yc_diagLog([NSString stringWithFormat:@"sync %@ attempt %d respNil", videoId, attempt]);
+    }
     if (![resp isKindOfClass:[NSDictionary class]]) {
         yc_diagLog([NSString stringWithFormat:@"sync %@ respNil", videoId]);
         return nil;
@@ -511,17 +514,17 @@ static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     NSArray *list = resp[@"videoList"];
     if (![list isKindOfClass:[NSArray class]] || list.count == 0) {
         yc_diagLog([NSString stringWithFormat:@"sync %@ listEmpty", videoId]);
-        return nil;
+        return [NSArray array];
     }
     id first = list[0];
     if (![first isKindOfClass:[NSDictionary class]]) {
         yc_diagLog([NSString stringWithFormat:@"sync %@ itemBad", videoId]);
-        return nil;
+        return [NSArray array];
     }
     NSArray *addrs = first[@"address"];
     if (![addrs isKindOfClass:[NSArray class]] || addrs.count == 0) {
         yc_diagLog([NSString stringWithFormat:@"sync %@ addrEmpty", videoId]);
-        return nil;
+        return [NSArray array];
     }
     yc_diagLog([NSString stringWithFormat:@"sync %@ OK addrs=%lu", videoId, (unsigned long)addrs.count]);
     @synchronized (yc_videoAddrs) {
@@ -529,6 +532,28 @@ static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     }
     yc_saveCache();
     return addrs;
+}
+
+static void yc_rescueVideo(NSString *videoId) {
+    if (![videoId isKindOfClass:[NSString class]] || videoId.length == 0) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        @autoreleasepool {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                @synchronized (yc_videoAddrs) {
+                    if (yc_videoAddrs[videoId]) return;
+                }
+                NSString *t = yc_getToken();
+                if (t.length == 0) return;
+                NSArray *via = yc_resolveViaAddresses(videoId, t);
+                if (via && via.count > 0) {
+                    yc_diagLog([NSString stringWithFormat:@"rescue %@ OK", videoId]);
+                    return;
+                }
+                [NSThread sleepForTimeInterval:2];
+            }
+            yc_diagLog([NSString stringWithFormat:@"rescue %@ FAIL", videoId]);
+        }
+    });
 }
 
 static NSArray *yc_resolveSync(NSString *videoId) {
@@ -548,10 +573,14 @@ static NSArray *yc_resolveSync(NSString *videoId) {
     }
     if (warmDone) {
         NSArray *via = yc_resolveViaAddresses(videoId, token);
-        if (via) return via;
-        @synchronized (yc_videoAddrs) {
-            [yc_notFoundIds addObject:videoId];
+        if (via && via.count > 0) return via;
+        if (via) {
+            @synchronized (yc_videoAddrs) {
+                [yc_notFoundIds addObject:videoId];
+            }
+            return nil;
         }
+        yc_rescueVideo(videoId);
         return nil;
     }
     NSArray *ids = yc_themeIdsForToken(token);
@@ -578,16 +607,22 @@ static NSArray *yc_resolveSync(NSString *videoId) {
     [q release];
     if (hit) return hit;
     NSArray *via = yc_resolveViaAddresses(videoId, token);
-    if (via) return via;
+    if (via && via.count > 0) return via;
+    if (via) {
+        @synchronized (yc_videoAddrs) {
+            [yc_notFoundIds addObject:videoId];
+            return yc_videoAddrs[videoId];
+        }
+    }
+    yc_rescueVideo(videoId);
     @synchronized (yc_videoAddrs) {
-        [yc_notFoundIds addObject:videoId];
         return yc_videoAddrs[videoId];
     }
 }
 
 static NSString *yc_pickURL(NSArray *addrs, BOOL isMiddle, BOOL isHLS) {
     NSString *wantFormat = isHLS ? @"hls" : @"mp4";
-    NSString *wantClarity = isMiddle ? @"middle" : @"fullHigh";
+    NSString *wantClarity = isMiddle ? @"middle" : @"high";
     NSArray *order = @[
         @[@"mobile", wantFormat, wantClarity],
         @[@"mobile", @"hls", @"fullHigh"],
@@ -605,7 +640,10 @@ static NSString *yc_pickURL(NSArray *addrs, BOOL isMiddle, BOOL isHLS) {
             if (![a isKindOfClass:[NSDictionary class]]) continue;
             if ([a[@"platform"] isEqualToString:want[0]] && [a[@"format"] isEqualToString:want[1]] && [a[@"clarity"] isEqualToString:want[2]]) {
                 NSString *u = a[@"url"];
-                if ([u isKindOfClass:[NSString class]] && u.length > 0) return u;
+                if ([u isKindOfClass:[NSString class]] && u.length > 0) {
+                    yc_diagLog([NSString stringWithFormat:@"pickURL middle=%d hls=%d got %@/%@", isMiddle, isHLS, [a[@"clarity"] description], [a[@"platform"] description]]);
+                    return u;
+                }
             }
         }
     }
@@ -652,13 +690,20 @@ static NSArray *yc_getHLSURLs(id self, SEL _cmd) {
     if (addrs) {
         NSArray *sorted = yc_sortedHLSAddrs(addrs);
         NSMutableArray *out = [NSMutableArray array];
+        NSMutableArray *cl = [NSMutableArray array];
         for (id a in sorted) {
             if (![a isKindOfClass:[NSDictionary class]]) continue;
             if (![a[@"format"] isEqualToString:@"hls"]) continue;
             NSString *u = a[@"url"];
-            if ([u isKindOfClass:[NSString class]] && u.length > 0) [out addObject:u];
+            if ([u isKindOfClass:[NSString class]] && u.length > 0) {
+                [out addObject:u];
+                [cl addObject:[NSString stringWithFormat:@"%@/%@", [a[@"clarity"] description], [a[@"platform"] description]]];
+            }
         }
-        if (out.count > 0) return out;
+        if (out.count > 0) {
+            yc_diagLog([NSString stringWithFormat:@"hlsOrder %@ %@", vid, [cl componentsJoinedByString:@","]]);
+            return out;
+        }
     }
     return ((NSArray *(*)(id, SEL))yc_orig_getHLSURLs)(self, _cmd);
 }
@@ -1098,13 +1143,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v31 loaded");
+    NSLog(@"[YangCongVipFix] v32 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v31 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v32 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
