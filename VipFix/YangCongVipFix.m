@@ -339,6 +339,16 @@ static void yc_prefetchSpecialCourses(NSString *token) {
     yc_diagLog([NSString stringWithFormat:@"special chapters done rawVids=%lu", (unsigned long)allVids.count]);
     yc_specialRan = YES;
     yc_specialRawVids = allVids.count;
+    if (allVids.count == 0 && yc_capturedToken.length > 0 && ![yc_capturedToken isEqualToString:token] && !yc_specialRetried) {
+        yc_specialRetried = YES;
+        yc_diagLog(@"special empty with captured token, retrying prefetch");
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+            @autoreleasepool {
+                NSString *t = yc_getToken();
+                if (t.length > 0) yc_prefetchSpecialCourses(t);
+            }
+        });
+    }
     NSMutableArray *uniq = [NSMutableArray array];
     NSMutableSet *seen = [NSMutableSet set];
     for (NSString *vid in allVids) {
@@ -419,7 +429,7 @@ static void yc_warmUp(void) {
 
 static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token) {
     NSDictionary *body = @{@"videoList": @[@{@"videoId": videoId}]};
-    id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 10);
+    id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
     if (![resp isKindOfClass:[NSDictionary class]]) {
         yc_diagLog([NSString stringWithFormat:@"sync %@ respNil", videoId]);
         return nil;
@@ -927,7 +937,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
                     }
                 }
                 if (isNew) {
-                    yc_diagLog(@"captured token from app request");
+                    yc_diagLog([NSString stringWithFormat:@"captured token from app request len=%lu", (unsigned long)tok.length]);
                     if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
                         yc_specialRetried = YES;
                         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -1000,13 +1010,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v28 loaded");
+    NSLog(@"[YangCongVipFix] v29 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v28 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v29 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
