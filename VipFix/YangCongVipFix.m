@@ -43,9 +43,6 @@ static IMP yc_orig_getURL;
 static IMP yc_orig_getHLSURLs;
 static IMP yc_orig_getVideoUrlsBySuffix;
 static IMP yc_orig_getVideoAddresssBySuffix;
-static IMP yc_orig_addresses;
-static IMP yc_orig_cacheMp4Addresses;
-static IMP yc_orig_cacheYCMAddresses;
 static IMP yc_orig_handleVideoModel;
 static int yc_warmRetryCount;
 
@@ -561,51 +558,6 @@ static id yc_getVideoAddresssBySuffix(id self, SEL _cmd, NSString *suffix) {
     return orig;
 }
 
-static id yc_addresses(id self, SEL _cmd) {
-    NSString *vid = ((NSString *(*)(id, SEL))objc_msgSend)(self, @selector(Id));
-    NSArray *addrs = nil;
-    if ([vid isKindOfClass:[NSString class]] && vid.length > 0) {
-        @synchronized (yc_videoAddrs) {
-            addrs = yc_videoAddrs[vid];
-        }
-    }
-    if (addrs) {
-        NSArray *f = yc_addrsWithVideoId(addrs, vid);
-        if (f.count > 0) return f;
-    }
-    return ((id (*)(id, SEL))yc_orig_addresses)(self, _cmd);
-}
-
-static id yc_cacheMp4Addresses(id self, SEL _cmd) {
-    NSString *vid = ((NSString *(*)(id, SEL))objc_msgSend)(self, @selector(Id));
-    NSArray *addrs = yc_lookupAddrs(vid);
-    id orig = ((id (*)(id, SEL))yc_orig_cacheMp4Addresses)(self, _cmd);
-    if (addrs && [orig isKindOfClass:[NSArray class]] && [(NSArray *)orig count] > 0 && [[(NSArray *)orig objectAtIndex:0] isKindOfClass:[NSDictionary class]]) {
-        NSArray *f = yc_filterAddrsForSuffix(addrs, @"mp4", vid);
-        NSMutableArray *mp4 = [NSMutableArray array];
-        for (id a in f) {
-            if ([[[a[@"format"] description] lowercaseString] isEqualToString:@"mp4"]) [mp4 addObject:a];
-        }
-        if (mp4.count > 0) return mp4;
-    }
-    return orig;
-}
-
-static id yc_cacheYCMAddresses(id self, SEL _cmd) {
-    NSString *vid = ((NSString *(*)(id, SEL))objc_msgSend)(self, @selector(Id));
-    NSArray *addrs = yc_lookupAddrs(vid);
-    id orig = ((id (*)(id, SEL))yc_orig_cacheYCMAddresses)(self, _cmd);
-    if (addrs && [orig isKindOfClass:[NSArray class]] && [(NSArray *)orig count] > 0 && [[(NSArray *)orig objectAtIndex:0] isKindOfClass:[NSDictionary class]]) {
-        NSArray *f = yc_filterAddrsForSuffix(addrs, @"ycm", vid);
-        NSMutableArray *ycm = [NSMutableArray array];
-        for (id a in f) {
-            if ([[[a[@"format"] description] lowercaseString] isEqualToString:@"ycm"]) [ycm addObject:a];
-        }
-        if (ycm.count > 0) return ycm;
-    }
-    return orig;
-}
-
 static NSArray *yc_hlsURLStrings(NSArray *addrs) {
     NSMutableArray *out = [NSMutableArray array];
     for (id a in addrs) {
@@ -910,7 +862,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v22 loaded");
+    NSLog(@"[YangCongVipFix] v23 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
@@ -950,21 +902,6 @@ static void yc_init(void) {
         if (m4) {
             yc_orig_getVideoAddresssBySuffix = method_getImplementation(m4);
             method_setImplementation(m4, (IMP)yc_getVideoAddresssBySuffix);
-        }
-        Method m5 = class_getInstanceMethod(hv, @selector(addresses));
-        if (m5) {
-            yc_orig_addresses = method_getImplementation(m5);
-            method_setImplementation(m5, (IMP)yc_addresses);
-        }
-        Method m6 = class_getInstanceMethod(hv, @selector(cacheMp4Addresses));
-        if (m6) {
-            yc_orig_cacheMp4Addresses = method_getImplementation(m6);
-            method_setImplementation(m6, (IMP)yc_cacheMp4Addresses);
-        }
-        Method m7 = class_getInstanceMethod(hv, @selector(cacheYCMAddresses));
-        if (m7) {
-            yc_orig_cacheYCMAddresses = method_getImplementation(m7);
-            method_setImplementation(m7, (IMP)yc_cacheYCMAddresses);
         }
     }
     Class off = objc_getClass("YCPlayerBusinessOffsetPlugin");
