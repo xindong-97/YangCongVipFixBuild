@@ -256,6 +256,70 @@ static void yc_storeAddressList(id resp) {
     }
 }
 
+static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
+    if (!vids || vids.count == 0 || token.length == 0) return;
+    NSMutableArray *todo = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+    @synchronized (yc_videoAddrs) {
+        for (NSString *vid in vids) {
+            if (![vid isKindOfClass:[NSString class]] || vid.length == 0) continue;
+            if ([seen containsObject:vid]) continue;
+            [seen addObject:vid];
+            if (!yc_videoAddrs[vid]) [todo addObject:vid];
+        }
+    }
+    if (todo.count == 0) return;
+    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch %lu vids", (unsigned long)todo.count]);
+    NSUInteger chunk = 500;
+    for (NSUInteger start = 0; start < todo.count; start += chunk) {
+        NSRange range = NSMakeRange(start, MIN(chunk, todo.count - start));
+        NSArray *part = [todo subarrayWithRange:range];
+        NSMutableArray *list = [NSMutableArray array];
+        for (NSString *vid in part) [list addObject:@{@"videoId": vid}];
+        NSDictionary *body = @{@"videoList": list};
+        id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
+        yc_storeAddressList(resp);
+        yc_saveCache();
+    }
+    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch done table=%lu", (unsigned long)yc_tableCount()]);
+}
+
+static NSComparisonResult yc_hlsAddrCompare(id a, id b) {
+    NSDictionary *da = [a isKindOfClass:[NSDictionary class]] ? a : nil;
+    NSDictionary *db = [b isKindOfClass:[NSDictionary class]] ? b : nil;
+    NSString *ca = [[da[@"clarity"] description] lowercaseString];
+    NSString *cb = [[db[@"clarity"] description] lowercaseString];
+    BOOL fa = [ca isEqualToString:@"fullhigh"];
+    BOOL fb = [cb isEqualToString:@"fullhigh"];
+    if (fa != fb) return fa ? NSOrderedDescending : NSOrderedAscending;
+    NSString *pa = [[da[@"platform"] description] lowercaseString];
+    NSString *pb = [[db[@"platform"] description] lowercaseString];
+    BOOL ma = [pa isEqualToString:@"mobile"];
+    BOOL mb = [pb isEqualToString:@"mobile"];
+    if (ma != mb) return ma ? NSOrderedDescending : NSOrderedAscending;
+    NSUInteger ra = 2, rb = 2;
+    if ([ca isEqualToString:@"high"]) ra = 0;
+    else if ([ca isEqualToString:@"middle"]) ra = 1;
+    else if ([ca isEqualToString:@"low"]) ra = 2;
+    if ([cb isEqualToString:@"high"]) rb = 0;
+    else if ([cb isEqualToString:@"middle"]) rb = 1;
+    else if ([cb isEqualToString:@"low"]) rb = 2;
+    if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
+    return NSOrderedSame;
+}
+
+static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
+    NSMutableArray *hls = [NSMutableArray array];
+    for (id a in addrs) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        if (![[a[@"format"] description] isEqualToString:@"hls"]) continue;
+        [hls addObject:a];
+    }
+    if (hls.count == 0) return addrs;
+    [hls sortUsingFunction:(NSComparisonResult (*)(id, id, void *))yc_hlsAddrCompare context:NULL];
+    return hls;
+}
+
 static void yc_diagLog(NSString *msg) {
     static NSString *path = nil;
     static NSObject *lock = nil;
@@ -522,13 +586,16 @@ static NSArray *yc_resolveSync(NSString *videoId) {
 
 static NSString *yc_pickURL(NSArray *addrs, BOOL isMiddle, BOOL isHLS) {
     NSString *wantFormat = isHLS ? @"hls" : @"mp4";
-    NSString *wantClarity = isMiddle ? @"middle" : @"high";
+    NSString *wantClarity = isMiddle ? @"middle" : @"fullHigh";
     NSArray *order = @[
         @[@"mobile", wantFormat, wantClarity],
+        @[@"mobile", @"hls", @"fullHigh"],
         @[@"mobile", @"hls", @"high"],
         @[@"mobile", @"hls", @"middle"],
         @[@"mobile", @"hls", @"low"],
+        @[@"pc", @"hls", @"fullHigh"],
         @[@"pc", @"hls", @"high"],
+        @[@"mobile", @"mp4", @"fullHigh"],
         @[@"mobile", @"mp4", @"high"],
         @[@"mobile", @"mp4", @"middle"]
     ];
@@ -582,8 +649,9 @@ static NSArray *yc_getHLSURLs(id self, SEL _cmd) {
         if (!addrs) addrs = yc_resolveSync(vid);
     }
     if (addrs) {
+        NSArray *sorted = yc_sortedHLSAddrs(addrs);
         NSMutableArray *out = [NSMutableArray array];
-        for (id a in addrs) {
+        for (id a in sorted) {
             if (![a isKindOfClass:[NSDictionary class]]) continue;
             if (![a[@"format"] isEqualToString:@"hls"]) continue;
             NSString *u = a[@"url"];
@@ -687,8 +755,9 @@ static id yc_getVideoAddresssBySuffix(id self, SEL _cmd, NSString *suffix) {
 }
 
 static NSArray *yc_hlsURLStrings(NSArray *addrs) {
+    NSArray *sorted = yc_sortedHLSAddrs(addrs);
     NSMutableArray *out = [NSMutableArray array];
-    for (id a in addrs) {
+    for (id a in sorted) {
         if (![a isKindOfClass:[NSDictionary class]]) continue;
         if (![[a[@"format"] description] isEqualToString:@"hls"]) continue;
         NSString *u = a[@"url"];
@@ -771,6 +840,16 @@ static NSData *yc_rewritePackageChapter(NSData *data) {
     id obj = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:NULL];
     if (!obj) return data;
     yc_unlockNode(obj);
+    NSMutableArray *vids = [NSMutableArray array];
+    yc_collectVideoIds(obj, vids);
+    if (vids.count > 0) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+            @autoreleasepool {
+                NSString *t = yc_getToken();
+                if (t.length > 0) yc_prefetchVideoIds(vids, t);
+            }
+        });
+    }
     NSData *out = [NSJSONSerialization dataWithJSONObject:obj options:0 error:NULL];
     return out ? out : data;
 }
@@ -1018,13 +1097,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v30 loaded");
+    NSLog(@"[YangCongVipFix] v31 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v30 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v31 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
