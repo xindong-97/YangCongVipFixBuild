@@ -8,6 +8,7 @@ static BOOL yc_bool_no(id self, SEL _cmd) { return NO; }
 static BOOL yc_fireAuthYes(id self, SEL _cmd, double t, BOOL isPlayEnd) { return YES; }
 static double yc_double_long(id self, SEL _cmd) { return 1e9; }
 static NSString *yc_expire_2028(id self, SEL _cmd, id courseId) { return @"2028-12-31"; }
+static void yc_offsetNoop(id self, SEL _cmd, double t) { (void)self; (void)_cmd; (void)t; }
 
 static void yc_replace(Class cls, SEL sel, IMP imp) {
     if (!cls) return;
@@ -23,6 +24,16 @@ static void yc_replaceDouble(Class cls, SEL sel) {
     yc_replace(cls, sel, (IMP)yc_double_long);
 }
 
+static void yc_replaceClass(Class cls, SEL sel, IMP imp, IMP *origOut) {
+    if (!cls) return;
+    Class meta = object_getClass((id)cls);
+    if (!meta) return;
+    Method m = class_getInstanceMethod(meta, sel);
+    if (!m) return;
+    if (origOut) *origOut = method_getImplementation(m);
+    method_setImplementation(m, imp);
+}
+
 static NSMutableDictionary *yc_videoAddrs;
 static NSMutableSet *yc_notFoundIds;
 static BOOL yc_warmDone;
@@ -35,6 +46,7 @@ static IMP yc_orig_getVideoAddresssBySuffix;
 static IMP yc_orig_addresses;
 static IMP yc_orig_cacheMp4Addresses;
 static IMP yc_orig_cacheYCMAddresses;
+static IMP yc_orig_handleVideoModel;
 static int yc_warmRetryCount;
 
 static NSString *yc_getToken(void) {
@@ -594,6 +606,55 @@ static id yc_cacheYCMAddresses(id self, SEL _cmd) {
     return orig;
 }
 
+static NSArray *yc_hlsURLStrings(NSArray *addrs) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (id a in addrs) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        if (![[a[@"format"] description] isEqualToString:@"hls"]) continue;
+        NSString *u = a[@"url"];
+        if ([u isKindOfClass:[NSString class]] && u.length > 0) [out addObject:u];
+    }
+    if (out.count > 0) return out;
+    for (id a in addrs) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        NSString *u = a[@"url"];
+        if ([u isKindOfClass:[NSString class]] && u.length > 0) [out addObject:u];
+    }
+    return out;
+}
+
+static BOOL yc_urlsAreTrial(NSArray *urls) {
+    if (!urls || urls.count == 0) return YES;
+    for (id u in urls) {
+        if (![u isKindOfClass:[NSString class]]) continue;
+        if ([u containsString:@"video-demo"]) return YES;
+    }
+    return NO;
+}
+
+static id yc_handleVideoModel(id self, SEL _cmd, id model, id replaceURLs) {
+    id item = ((id (*)(id, SEL, id, id))yc_orig_handleVideoModel)(self, _cmd, model, replaceURLs);
+    if (!item) return item;
+    NSArray *urls = nil;
+    if ([item respondsToSelector:@selector(videoURLs)]) urls = [item videoURLs];
+    if (!yc_urlsAreTrial(urls)) return item;
+    NSString *vid = nil;
+    if ([item respondsToSelector:@selector(videoId)]) vid = [item videoId];
+    if (![vid isKindOfClass:[NSString class]] || vid.length == 0) {
+        if (model && [model respondsToSelector:@selector(Id)]) vid = [model Id];
+    }
+    NSArray *addrs = yc_lookupAddrs(vid);
+    if (!addrs) return item;
+    NSArray *full = yc_hlsURLStrings(addrs);
+    if (full.count == 0) return item;
+    if ([item respondsToSelector:@selector(setVideoURLs:)]) {
+        [item setVideoURLs:full];
+    } else {
+        @try { [item setValue:full forKey:@"videoURLs"]; } @catch (id e) {}
+    }
+    return item;
+}
+
 static NSMutableArray *yc_examIds;
 
 static NSData *yc_rewriteCourseList(NSData *data) {
@@ -849,6 +910,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
+    NSLog(@"[YangCongVipFix] v22 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
@@ -905,6 +967,12 @@ static void yc_init(void) {
             method_setImplementation(m7, (IMP)yc_cacheYCMAddresses);
         }
     }
+    Class off = objc_getClass("YCPlayerBusinessOffsetPlugin");
+    if (off) {
+        Method om = class_getInstanceMethod(off, @selector(onPlayerSwitchPlayTimeOffset:));
+        if (om) method_setImplementation(om, (IMP)yc_offsetNoop);
+    }
+    yc_replaceClass(objc_getClass("YCPlayerItemTools"), @selector(handleVideoModel:replaceVideoURLs:), (IMP)yc_handleVideoModel, &yc_orig_handleVideoModel);
     Class vipInfo = objc_getClass("YCVipInfoModel");
     yc_replaceBool(vipInfo, @selector(isVipWithStageId:subjectId:), YES);
     yc_replaceBool(vipInfo, @selector(isVipWithVipType:), YES);
