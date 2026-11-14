@@ -929,10 +929,6 @@ static id yc_getVideoAddresssBySuffix(id self, SEL _cmd, NSString *suffix) {
     return orig;
 }
 
-@interface YCAddressesM : NSObject
-+ (instancetype)mj_objectWithKeyValues:(NSDictionary *)keyValues;
-@end
-
 static id yc_getCacheVideoByTag(id self, SEL _cmd, NSString *tag, NSString *suffix) {
     NSString *vid = ((NSString *(*)(id, SEL))objc_msgSend)(self, @selector(Id));
     NSArray *addrs = yc_lookupAddrs(vid);
@@ -948,7 +944,8 @@ static id yc_getCacheVideoByTag(id self, SEL _cmd, NSString *tag, NSString *suff
                 NSString *u = a[@"url"];
                 if ([u isKindOfClass:[NSString class]] && u.length > 0) {
                     yc_diagLog([NSString stringWithFormat:@"cacheVideoByTag %@ %@/%@ tableHit", vid, tag, suffix]);
-                    return [YCAddressesM mj_objectWithKeyValues:a];
+                    Class addrCls = objc_getClass("YCAddressesM");
+                    return ((id (*)(id, SEL, id))objc_msgSend)((id)addrCls, @selector(mj_objectWithKeyValues:), a);
                 }
             }
         }
