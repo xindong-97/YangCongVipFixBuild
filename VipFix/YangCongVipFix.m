@@ -16,14 +16,16 @@ static double yc_double_long(id self, SEL _cmd) { return 1e9; }
 static NSString *yc_expire_2028(id self, SEL _cmd, id courseId) { return @"2028-12-31"; }
 static void yc_offsetNoop(id self, SEL _cmd, double t) { (void)self; (void)_cmd; (void)t; }
 
-static void yc_replace(Class cls, SEL sel, IMP imp) {
-    if (!cls) return;
+static BOOL yc_replace(Class cls, SEL sel, IMP imp) {
+    if (!cls) return NO;
     Method m = class_getInstanceMethod(cls, sel);
-    if (m) method_setImplementation(m, imp);
+    if (!m) return NO;
+    method_setImplementation(m, imp);
+    return YES;
 }
 
-static void yc_replaceBool(Class cls, SEL sel, BOOL v) {
-    yc_replace(cls, sel, (IMP)(v ? yc_bool_yes : yc_bool_no));
+static BOOL yc_replaceBool(Class cls, SEL sel, BOOL v) {
+    return yc_replace(cls, sel, (IMP)(v ? yc_bool_yes : yc_bool_no));
 }
 
 static void yc_replaceDouble(Class cls, SEL sel) {
@@ -1349,31 +1351,37 @@ static void yc_recordVipInfo(id self, SEL _cmd, id response) {
 }
 static void yc_hookVipManager(void) {
     Class vm = objc_getClass("YCVipManager");
-    if (!vm) return;
-    yc_replace(vm, @selector(hadAuthWithWithPay:topicId:courseId:stageId:subjectId:semesterId:publisherId:), (IMP)yc_hadAuthYes);
-    yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:courseId:stageId:subjectId:semesterId:publisherId:), YES);
-    yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:), YES);
-    yc_replaceBool(vm, @selector(hadAuthTrialWithCourseId:), YES);
-    yc_replaceBool(vm, @selector(hadAuthTrialWithStageId:subjectId:semesterId:publisherId:), YES);
-    yc_replaceBool(vm, @selector(isShowPaymentPostWithTopicId:isPay:stageId:subjectId:semesterId:publisherId:), NO);
-    yc_replaceBool(vm, @selector(isAuthSuccessWithCourseId:), YES);
-    yc_replaceBool(vm, @selector(returnUserIsVip), YES);
+    if (!vm) {
+        yc_diagLog(@"hookVipManager class NIL");
+        return;
+    }
+    BOOL a = yc_replace(vm, @selector(hadAuthWithWithPay:topicId:courseId:stageId:subjectId:semesterId:publisherId:), (IMP)yc_hadAuthYes);
+    BOOL b = yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:courseId:stageId:subjectId:semesterId:publisherId:), YES);
+    BOOL c = yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:), YES);
+    BOOL d = yc_replaceBool(vm, @selector(hadAuthTrialWithCourseId:), YES);
+    BOOL e = yc_replaceBool(vm, @selector(hadAuthTrialWithStageId:subjectId:semesterId:publisherId:), YES);
+    BOOL f = yc_replaceBool(vm, @selector(isShowPaymentPostWithTopicId:isPay:stageId:subjectId:semesterId:publisherId:), NO);
+    BOOL g = yc_replaceBool(vm, @selector(isAuthSuccessWithCourseId:), YES);
+    BOOL h = yc_replaceBool(vm, @selector(returnUserIsVip), YES);
     Method rm = class_getInstanceMethod(vm, @selector(recordVipInfoWithResponseObject:));
+    BOOL i = NO;
     if (rm) {
         yc_orig_recordVipInfo = (void *)method_getImplementation(rm);
         method_setImplementation(rm, (IMP)yc_recordVipInfo);
+        i = YES;
     }
+    yc_diagLog([NSString stringWithFormat:@"hookVipManager hadAuth=%d trial=%d/%d/%d/%d payPost=%d authOK=%d isVip=%d recordVip=%d", a, b, c, d, e, f, g, h, i]);
 }
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v40 loaded");
+    NSLog(@"[YangCongVipFix] v41 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v40 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v41 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         yc_setupDiagButton();
     });
