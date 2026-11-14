@@ -14,7 +14,7 @@ workflows:
     scripts:
       - name: Build dylib
         script: |
-          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -o YangCongVipFix.dylib VipFix/YangCongVipFix.m
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -framework WebKit -o YangCongVipFix.dylib VipFix/YangCongVipFix.m
           ls -lh YangCongVipFix.dylib
           file YangCongVipFix.dylib
     artifacts:
