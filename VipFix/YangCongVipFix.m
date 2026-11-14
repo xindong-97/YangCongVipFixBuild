@@ -291,14 +291,14 @@ static NSComparisonResult yc_hlsAddrCompare(id a, id b, void *context) {
     NSString *ca = [[da[@"clarity"] description] lowercaseString];
     NSString *cb = [[db[@"clarity"] description] lowercaseString];
     NSUInteger ra = 4, rb = 4;
-    if ([ca isEqualToString:@"low"]) ra = 0;
-    else if ([ca isEqualToString:@"middle"]) ra = 1;
-    else if ([ca isEqualToString:@"high"]) ra = 2;
-    else if ([ca isEqualToString:@"fullhigh"]) ra = 3;
-    if ([cb isEqualToString:@"low"]) rb = 0;
-    else if ([cb isEqualToString:@"middle"]) rb = 1;
-    else if ([cb isEqualToString:@"high"]) rb = 2;
-    else if ([cb isEqualToString:@"fullhigh"]) rb = 3;
+    if ([ca isEqualToString:@"fullhigh"]) ra = 0;
+    else if ([ca isEqualToString:@"high"]) ra = 1;
+    else if ([ca isEqualToString:@"middle"]) ra = 2;
+    else if ([ca isEqualToString:@"low"]) ra = 3;
+    if ([cb isEqualToString:@"fullhigh"]) rb = 0;
+    else if ([cb isEqualToString:@"high"]) rb = 1;
+    else if ([cb isEqualToString:@"middle"]) rb = 2;
+    else if ([cb isEqualToString:@"low"]) rb = 3;
     if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
     NSString *pa = [[da[@"platform"] description] lowercaseString];
     NSString *pb = [[db[@"platform"] description] lowercaseString];
@@ -1143,13 +1143,13 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v32 loaded");
+    NSLog(@"[YangCongVipFix] v33 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v32 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v33 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
