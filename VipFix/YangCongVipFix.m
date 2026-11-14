@@ -4,6 +4,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+static void yc_diagLog(NSString *msg);
+static void yc_showDiagMenu(UIButton *btn);
 static NSUInteger yc_tableCount(void);
 
 static void yc_void_noop(id self, SEL _cmd) {}
@@ -72,6 +74,7 @@ static NSString *yc_getToken(void) {
     }
     if ([tok hasPrefix:@"Bearer "]) {
         tok = [tok substringFromIndex:7];
+        yc_diagLog(@"stripped Bearer prefix from token");
     }
     tok = [tok stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     if (tok.length == 0) {
@@ -97,6 +100,7 @@ static NSData *yc_fetchSync(NSString *urlStr, NSString *token, NSTimeInterval ti
         if (d) out = [d retain];
         NSInteger st = 0;
         if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
+        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"fetch %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -131,6 +135,7 @@ static id yc_postJSONSync(NSString *urlStr, NSDictionary *body, NSString *token,
         if (d) out = [d retain];
         NSInteger st = 0;
         if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
+        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"post %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -270,6 +275,7 @@ static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
         }
     }
     if (todo.count == 0) return;
+    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch %lu vids", (unsigned long)todo.count]);
     NSUInteger chunk = 500;
     for (NSUInteger start = 0; start < todo.count; start += chunk) {
         NSRange range = NSMakeRange(start, MIN(chunk, todo.count - start));
@@ -281,6 +287,7 @@ static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
         yc_storeAddressList(resp);
         yc_saveCache();
     }
+    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch done table=%lu", (unsigned long)yc_tableCount()]);
 }
 
 static NSComparisonResult yc_hlsAddrCompare(id a, id b, void *context) {
@@ -335,6 +342,160 @@ static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
     }
     [hls sortUsingFunction:yc_hlsAddrCompare context:NULL];
     return hls;
+}
+
+static NSString *yc_diagFilePath(void) {
+    static NSString *p = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{
+        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *doc = [dirs firstObject];
+        p = [[doc stringByAppendingPathComponent:@"YangCongVipFix_diag.txt"] retain];
+    });
+    return p;
+}
+
+static void yc_diagLog(NSString *msg) {
+    static NSObject *lock = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{
+        lock = [[NSObject alloc] init];
+    });
+    @synchronized (lock) {
+        NSString *path = yc_diagFilePath();
+        NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        } else {
+            [fh seekToEndOfFile];
+            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+    }
+}
+
+static UIWindow *yc_diagWindow = nil;
+
+static void yc_copyDiagOnly(UIButton *btn) {
+    NSString *content = [NSString stringWithContentsOfFile:yc_diagFilePath() encoding:NSUTF8StringEncoding error:NULL];
+    NSUInteger n = content ? content.length : 0;
+    if (n > 0) {
+        [[UIPasteboard generalPasteboard] setString:content];
+    }
+    yc_diagLog([NSString stringWithFormat:@"diag copied %lu bytes", (unsigned long)n]);
+    [btn setTitle:@"已复制✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
+    });
+}
+
+static void yc_clearDiagOnly(UIButton *btn) {
+    [@"" writeToFile:yc_diagFilePath() atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    yc_diagLog(@"diag cleared");
+    [btn setTitle:@"已清空✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
+    });
+}
+
+@interface YCDiagButtonTarget : NSObject
++ (instancetype)shared;
+- (void)buttonTapped:(id)sender;
+- (void)buttonDragged:(UIPanGestureRecognizer *)g;
+@end
+
+@implementation YCDiagButtonTarget
++ (instancetype)shared {
+    static YCDiagButtonTarget *s = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{ s = [[self alloc] init]; });
+    return s;
+}
+- (void)buttonTapped:(id)sender {
+    yc_diagLog(@"diag button tapped");
+    yc_showDiagMenu((UIButton *)sender);
+}
+- (void)buttonDragged:(UIPanGestureRecognizer *)g {
+    if (!yc_diagWindow) return;
+    CGPoint t = [g translationInView:yc_diagWindow];
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGRect f = yc_diagWindow.frame;
+        f.origin.x += t.x;
+        f.origin.y += t.y;
+        yc_diagWindow.frame = f;
+        [g setTranslation:CGPointMake(0, 0) inView:yc_diagWindow];
+    }
+}
+@end
+
+static void yc_showDiagMenu(UIButton *btn) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"诊断日志" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    UIAlertAction *copyAction = [UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        yc_copyDiagOnly(btn);
+    }];
+    UIAlertAction *clearAction = [UIAlertAction actionWithTitle:@"清空日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        yc_clearDiagOnly(btn);
+    }];
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil];
+    [alert addAction:copyAction];
+    [alert addAction:clearAction];
+    [alert addAction:cancelAction];
+    UIViewController *vc = nil;
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win == yc_diagWindow) continue;
+        if (win.isKeyWindow) { vc = win.rootViewController; break; }
+    }
+    if (!vc) {
+        for (UIWindow *win in [UIApplication sharedApplication].windows) {
+            if (win == yc_diagWindow) continue;
+            if (win.rootViewController) { vc = win.rootViewController; break; }
+        }
+    }
+    if (!vc) vc = yc_diagWindow.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    if (!vc) return;
+    UIPopoverPresentationController *pop = alert.popoverPresentationController;
+    if (pop) {
+        pop.sourceView = vc.view;
+        CGRect r = vc.view.bounds;
+        pop.sourceRect = CGRectMake(r.size.width / 2, r.size.height - 1, 1, 1);
+        pop.permittedArrowDirections = 0;
+    }
+    [vc presentViewController:alert animated:YES completion:nil];
+}
+
+static void yc_setupDiagButton(void) {
+    if (yc_diagWindow) return;
+    UIScreen *scr = [UIScreen mainScreen];
+    CGRect sb = scr.bounds;
+    CGFloat w = 84, h = 32;
+    CGRect fr = CGRectMake(sb.size.width - w - 16, sb.size.height - h - 120, w, h);
+    yc_diagWindow = [[UIWindow alloc] initWithFrame:fr];
+    yc_diagWindow.windowLevel = UIWindowLevelStatusBar + 1;
+    yc_diagWindow.backgroundColor = [UIColor clearColor];
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win.isKeyWindow && win.windowScene) {
+            yc_diagWindow.windowScene = win.windowScene;
+            break;
+        }
+    }
+    yc_diagWindow.hidden = NO;
+    yc_diagWindow.rootViewController = [[[UIViewController alloc] init] autorelease];
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.frame = yc_diagWindow.bounds;
+    btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
+    btn.layer.cornerRadius = 16;
+    btn.clipsToBounds = YES;
+    [btn setTitle:@"📋日志" forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [btn addTarget:[YCDiagButtonTarget shared] action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[YCDiagButtonTarget shared] action:@selector(buttonDragged:)];
+    pan.cancelsTouchesInView = NO;
+    [btn addGestureRecognizer:pan];
+    [pan release];
+    [yc_diagWindow addSubview:btn];
 }
 
 static NSUInteger yc_tableCount(void) {
@@ -403,10 +564,12 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id chapter = yc_fetchJSON(url, token, 8);
         if (chapter) yc_collectVideoIds(chapter, allVids);
     }
+    yc_diagLog([NSString stringWithFormat:@"special chapters done rawVids=%lu", (unsigned long)allVids.count]);
     yc_specialRan = YES;
     yc_specialRawVids = allVids.count;
     if (allVids.count == 0 && yc_capturedToken.length > 0 && ![yc_capturedToken isEqualToString:token] && !yc_specialRetried) {
         yc_specialRetried = YES;
+        yc_diagLog(@"special empty with captured token, retrying prefetch");
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
             @autoreleasepool {
                 NSString *t = yc_getToken();
@@ -423,6 +586,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         }
     }
     NSUInteger total = uniq.count;
+    yc_diagLog([NSString stringWithFormat:@"special uniqVids=%lu", (unsigned long)total]);
     NSUInteger chunk = 500;
     for (NSUInteger start = 0; start < total; start += chunk) {
         NSRange range = NSMakeRange(start, MIN(chunk, total - start));
@@ -433,6 +597,7 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
         yc_storeAddressList(resp);
         yc_saveCache();
+        yc_diagLog([NSString stringWithFormat:@"special batch %lu table=%lu", (unsigned long)start, (unsigned long)yc_tableCount()]);
     }
     yc_saveCache();
 }
@@ -446,6 +611,7 @@ static void yc_warmUp(void) {
         @autoreleasepool {
             NSString *token = yc_getToken();
             if (token.length == 0) {
+                yc_diagLog([NSString stringWithFormat:@"warmUp tokenEmpty retry=%d", yc_warmRetryCount]);
                 @synchronized (yc_videoAddrs) {
                     yc_warmStarted = NO;
                 }
@@ -457,6 +623,7 @@ static void yc_warmUp(void) {
                 }
                 return;
             }
+            yc_diagLog([NSString stringWithFormat:@"warmUp tokenLen=%lu", (unsigned long)token.length]);
             dispatch_group_t g = dispatch_group_create();
             dispatch_group_enter(g);
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -482,6 +649,7 @@ static void yc_warmUp(void) {
                 yc_warmDone = YES;
                 [yc_notFoundIds removeAllObjects];
             }
+            yc_diagLog([NSString stringWithFormat:@"warmUp done table=%lu", (unsigned long)yc_tableCount()]);
             yc_saveCache();
         }
     });
@@ -492,22 +660,28 @@ static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token, NSTim
     id resp = nil;
     for (int attempt = 0; attempt < maxAttempts && !resp; attempt++) {
         resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, timeout);
+        if (!resp) yc_diagLog([NSString stringWithFormat:@"sync %@ attempt %d respNil", videoId, attempt]);
     }
     if (![resp isKindOfClass:[NSDictionary class]]) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ respNil", videoId]);
         return nil;
     }
     NSArray *list = resp[@"videoList"];
     if (![list isKindOfClass:[NSArray class]] || list.count == 0) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ listEmpty", videoId]);
         return [NSArray array];
     }
     id first = list[0];
     if (![first isKindOfClass:[NSDictionary class]]) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ itemBad", videoId]);
         return [NSArray array];
     }
     NSArray *addrs = first[@"address"];
     if (![addrs isKindOfClass:[NSArray class]] || addrs.count == 0) {
+        yc_diagLog([NSString stringWithFormat:@"sync %@ addrEmpty", videoId]);
         return [NSArray array];
     }
+    yc_diagLog([NSString stringWithFormat:@"sync %@ OK addrs=%lu", videoId, (unsigned long)addrs.count]);
     @synchronized (yc_videoAddrs) {
         yc_videoAddrs[videoId] = addrs;
     }
@@ -527,10 +701,12 @@ static void yc_rescueVideo(NSString *videoId) {
                 if (t.length == 0) return;
                 NSArray *via = yc_resolveViaAddresses(videoId, t, 20, 3);
                 if (via && via.count > 0) {
+                    yc_diagLog([NSString stringWithFormat:@"rescue %@ OK", videoId]);
                     return;
                 }
                 [NSThread sleepForTimeInterval:2];
             }
+            yc_diagLog([NSString stringWithFormat:@"rescue %@ FAIL", videoId]);
         }
     });
 }
@@ -543,6 +719,7 @@ static NSArray *yc_resolveSync(NSString *videoId) {
     }
     NSString *token = yc_getToken();
     if (token.length == 0) {
+        yc_diagLog([NSString stringWithFormat:@"resolve %@ noToken", videoId]);
         return nil;
     }
     NSArray *via = yc_resolveViaAddresses(videoId, token, 8, 1);
@@ -580,6 +757,7 @@ static NSString *yc_pickURL(NSArray *addrs, BOOL isMiddle, BOOL isHLS) {
             if ([a[@"platform"] isEqualToString:want[0]] && [a[@"format"] isEqualToString:want[1]] && [a[@"clarity"] isEqualToString:want[2]]) {
                 NSString *u = a[@"url"];
                 if ([u isKindOfClass:[NSString class]] && u.length > 0) {
+                    yc_diagLog([NSString stringWithFormat:@"pickURL middle=%d hls=%d got %@/%@", isMiddle, isHLS, [a[@"clarity"] description], [a[@"platform"] description]]);
                     return u;
                 }
             }
@@ -639,6 +817,7 @@ static NSArray *yc_getHLSURLs(id self, SEL _cmd) {
             }
         }
         if (out.count > 0) {
+            yc_diagLog([NSString stringWithFormat:@"hlsOrder %@ %@", vid, [cl componentsJoinedByString:@","]]);
             return out;
         }
     }
@@ -652,8 +831,10 @@ static NSArray *yc_lookupAddrs(NSString *vid) {
             addrs = yc_videoAddrs[vid];
         }
         if (addrs) {
+            yc_diagLog([NSString stringWithFormat:@"lookup %@ tableHit addrs=%lu", vid, (unsigned long)addrs.count]);
         } else {
             addrs = yc_resolveSync(vid);
+            yc_diagLog([NSString stringWithFormat:@"lookup %@ syncResult=%@", vid, addrs ? [NSString stringWithFormat:@"OK addrs=%lu", (unsigned long)addrs.count] : @"FAIL"]);
         }
     }
     return addrs;
@@ -1025,6 +1206,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
                     }
                 }
                 if (isNew) {
+                    yc_diagLog([NSString stringWithFormat:@"captured token from 7to12 len=%lu", (unsigned long)tok.length]);
                     if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
                         yc_specialRetried = YES;
                         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -1098,7 +1280,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 static NSString *yc_examJS(void) {
     static NSString *js = nil;
-    if (!js) js = @"(function () {\n  if (window.__yc_exam_fix) return;\n  window.__yc_exam_fix = true;\n  function walk(o) {\n    if (!o || typeof o !== \"object\") return;\n    if (o instanceof Array) { for (var i = 0; i < o.length; i++) walk(o[i]); return; }\n    if (\"payType\" in o) { o.payType = \"free\"; o.pay = false; o.bigVip = false; o.payPage = \"\"; }\n    for (var k in o) walk(o[k]);\n  }\n  function fixAuth(j) {\n    if (!j) return j;\n    if (j.ids && j.ids instanceof Array && j.ids.length === 0) j.ids = [\"__yc_all__\"];\n    if (j.data && j.data.ids && j.data.ids instanceof Array && j.data.ids.length === 0) j.data.ids = [\"__yc_all__\"];\n    return j;\n  }\n  function fixDown(j) {\n    if (!j) return j;\n    if (typeof j.auth !== \"undefined\") j.auth = true;\n    if (j.data && typeof j.data.auth !== \"undefined\") j.data.auth = true;\n    return j;\n  }\n  function fixUserAuth(j) {\n    if (!j) return j;\n    var ids = [\"a820e7f0-4774-11ec-99c2-7367123a3632\", \"1c055db0-478c-11ec-8692-833186e50566\", \"3927c350-45e4-11ec-8692-833186e50566\", \"03591030-481e-11ec-8229-df3407f9a8df\", \"62b45180-45e3-11ec-8692-833186e50566\", \"777c4f0e-5c16-11ed-ba0c-ba0ab9872e3a\", \"9b9a46b0-478e-11ec-8692-833186e50566\", \"11f3faf6-75fd-11ed-a6cc-ea3c33132486\", \"b7be155c-45a4-11f0-b491-dae869946e39\", \"fbcac940-478b-11ec-a589-e52a584942a3\", \"4dc1e91e-f4d0-11ef-9fd7-9a1daf04f3fb\", \"1caa6bab-0146-11ef-9272-1ad70eaae358\", \"0c650748-02bd-11ef-84d1-aea51e33dbea\", \"260674bf-3456-11ef-9e4a-8e9d59d085aa\", \"65a12f78-0159-11ef-8577-9e782df4fecc\", \"b0400f23-a222-11ef-88f9-16aad193f435\", \"91d9b5a5-a222-11ef-a527-c6630ade03df\", \"597e750f-893e-11f0-8d5d-e69bcf52e7b7\", \"8c52c86a-893c-11f0-8d5d-e69bcf52e7b7\", \"cc519e90-88b1-11f0-a820-e62dc3581e44\", \"103b8d79-88aa-11f0-a820-e62dc3581e44\"];\n    var secs = [];\n    if (j.auth && typeof j.auth === \"object\") secs.push(j.auth);\n    if (j.data && typeof j.data === \"object\") secs.push(j.data);\n    for (var s = 0; s < secs.length; s++) {\n      var sc = secs[s].specialCourse;\n      if (!(sc instanceof Array)) sc = secs[s].specialCourse = [];\n      for (var i = 0; i < ids.length; i++) {\n        var found = false;\n        for (var k = 0; k < sc.length; k++) { if (sc[k] && sc[k].id === ids[i]) { found = true; break; } }\n        if (!found) sc.push({id: ids[i], expired: false, expireTime: \"2028-12-31T23:59:59.999Z\"});\n      }\n    }\n    return j;\n  }\n  function fixResp(j, url) {\n    if (url.indexOf(\"userAuth\") >= 0) return fixUserAuth(j);\n    if (url.indexOf(\"/study-practice/examination/auth\") >= 0) return fixAuth(j);\n    if (url.indexOf(\"/study-practice/examination/down/auth\") >= 0) return fixDown(j);\n    if (url.indexOf(\"/study-practice/examination\") >= 0) { walk(j); return j; }\n    return j;\n  }\n  function want(u) { return u.indexOf(\"study-practice/examination\") >= 0 || u.indexOf(\"userAuth\") >= 0; }\n  if (window.fetch) {\n    var _f = window.fetch;\n    window.fetch = function () {\n      var u = \"\";\n      try { u = typeof arguments[0] === \"string\" ? arguments[0] : (arguments[0] && arguments[0].url) || \"\"; } catch (e) {}\n      return _f.apply(this, arguments).then(function (r) {\n        if (!want(u)) return r;\n        var ct = r.headers.get(\"content-type\") || \"\";\n        if (ct.indexOf(\"application/json\") < 0) return r;\n        return r.clone().json().then(function (j) {\n          var d = fixResp(j, u);\n          return new Response(JSON.stringify(d), { status: r.status, statusText: r.statusText, headers: r.headers });\n        }).catch(function () { return r; });\n      });\n    };\n  }\n  var _open = XMLHttpRequest.prototype.open;\n  var _send = XMLHttpRequest.prototype.send;\n  XMLHttpRequest.prototype.open = function (m, u) { this.__yc_u = u; return _open.apply(this, arguments); };\n  XMLHttpRequest.prototype.send = function () {\n    var x = this;\n    var u = x.__yc_u || \"\";\n    if (!want(u)) return _send.apply(this, arguments);\n    var _o = x.onreadystatechange;\n    x.onreadystatechange = function () {\n      if (x.readyState === 4 && x.status === 200) {\n        try {\n          var j = JSON.parse(x.responseText);\n          var d = fixResp(j, u);\n          var s = JSON.stringify(d);\n          try { Object.defineProperty(x, \"responseText\", { value: s }); } catch (e) {}\n          try { Object.defineProperty(x, \"response\", { value: s }); } catch (e) {}\n        } catch (e) {}\n      }\n      if (_o) _o.apply(x, arguments);\n    };\n    return _send.apply(this, arguments);\n  };\n})();\n";;;;
+    if (!js) js = @"(function () {\n  if (window.__yc_exam_fix) return;\n  window.__yc_exam_fix = true;\n  function walk(o) {\n    if (!o || typeof o !== \"object\") return;\n    if (o instanceof Array) { for (var i = 0; i < o.length; i++) walk(o[i]); return; }\n    if (\"payType\" in o) { o.payType = \"free\"; o.pay = false; o.bigVip = false; o.payPage = \"\"; }\n    for (var k in o) walk(o[k]);\n  }\n  function fixAuth(j) {\n    if (!j) return j;\n    if (j.ids && j.ids instanceof Array && j.ids.length === 0) j.ids = [\"__yc_all__\"];\n    if (j.data && j.data.ids && j.data.ids instanceof Array && j.data.ids.length === 0) j.data.ids = [\"__yc_all__\"];\n    return j;\n  }\n  function fixDown(j) {\n    if (!j) return j;\n    if (typeof j.auth !== \"undefined\") j.auth = true;\n    if (j.data && typeof j.data.auth !== \"undefined\") j.data.auth = true;\n    return j;\n  }\n  function fixUserAuth(j) {\n    if (!j) return j;\n    var ids = [\"a820e7f0-4774-11ec-99c2-7367123a3632\", \"1c055db0-478c-11ec-8692-833186e50566\", \"3927c350-45e4-11ec-8692-833186e50566\", \"03591030-481e-11ec-8229-df3407f9a8df\", \"62b45180-45e3-11ec-8692-833186e50566\", \"777c4f0e-5c16-11ed-ba0c-ba0ab9872e3a\", \"9b9a46b0-478e-11ec-8692-833186e50566\", \"11f3faf6-75fd-11ed-a6cc-ea3c33132486\", \"b7be155c-45a4-11f0-b491-dae869946e39\", \"fbcac940-478b-11ec-a589-e52a584942a3\", \"4dc1e91e-f4d0-11ef-9fd7-9a1daf04f3fb\", \"1caa6bab-0146-11ef-9272-1ad70eaae358\", \"0c650748-02bd-11ef-84d1-aea51e33dbea\", \"260674bf-3456-11ef-9e4a-8e9d59d085aa\", \"65a12f78-0159-11ef-8577-9e782df4fecc\", \"b0400f23-a222-11ef-88f9-16aad193f435\", \"91d9b5a5-a222-11ef-a527-c6630ade03df\", \"597e750f-893e-11f0-8d5d-e69bcf52e7b7\", \"8c52c86a-893c-11f0-8d5d-e69bcf52e7b7\", \"cc519e90-88b1-11f0-a820-e62dc3581e44\", \"103b8d79-88aa-11f0-a820-e62dc3581e44\"];\n    var secs = [];\n    if (j.auth && typeof j.auth === \"object\") secs.push(j.auth);\n    if (j.data && typeof j.data === \"object\") secs.push(j.data);\n    for (var s = 0; s < secs.length; s++) {\n      var sc = secs[s].specialCourse;\n      if (!(sc instanceof Array)) sc = secs[s].specialCourse = [];\n      for (var i = 0; i < ids.length; i++) {\n        var found = false;\n        for (var k = 0; k < sc.length; k++) { if (sc[k] && sc[k].id === ids[i]) { found = true; break; } }\n        if (!found) sc.push({id: ids[i], expired: false, expireTime: \"2028-12-31T23:59:59.999Z\"});\n      }\n    }\n    return j;\n  }\n  function fixStudyPlan(j, url) {\n    if (!j) return j;\n    if (url.indexOf(\"userSupplementContentList\") >= 0) {\n      if (j.userClassInfo && j.userClassInfo.authScope) {\n        j.userClassInfo.authScope.hasSystem = true;\n        j.userClassInfo.authScope.hasPackage = true;\n      }\n      return j;\n    }\n    if (url.indexOf(\"getClassUserAuth\") >= 0) {\n      if (j.authScope) { j.authScope.hasSystem = true; j.authScope.hasPackage = true; }\n      return j;\n    }\n    if (url.indexOf(\"userDailyCourseContent\") >= 0) {\n      if (j.classInfos instanceof Array)\n        for (var i = 0; i < j.classInfos.length; i++)\n          if (j.classInfos[i].authScope) {\n            j.classInfos[i].authScope.hasSystem = true;\n            j.classInfos[i].authScope.hasPackage = true;\n          }\n      return j;\n    }\n    return j;\n  }\n  function fixConfig(j, url) {\n    if (!j) return j;\n    if (url.indexOf(\"topicKey=aIClassAppFetch\") >= 0 && j.content) {\n      j.content.isAppFetch = false;\n    }\n    return j;\n  }\n  function fixResp(j, url) {\n    if (url.indexOf(\"userSupplementContentList\") >= 0 || url.indexOf(\"getClassUserAuth\") >= 0 || url.indexOf(\"userDailyCourseContent\") >= 0) return fixStudyPlan(j, url);\n    if (url.indexOf(\"configByKey\") >= 0) return fixConfig(j, url);\n    if (url.indexOf(\"userAuth\") >= 0) return fixUserAuth(j);\n    if (url.indexOf(\"/study-practice/examination/auth\") >= 0) return fixAuth(j);\n    if (url.indexOf(\"/study-practice/examination/down/auth\") >= 0) return fixDown(j);\n    if (url.indexOf(\"/study-practice/examination\") >= 0) { walk(j); return j; }\n    return j;\n  }\n  function want(u) { return u.indexOf(\"study-practice/examination\") >= 0 || u.indexOf(\"userAuth\") >= 0 || u.indexOf(\"userSupplementContentList\") >= 0 || u.indexOf(\"getClassUserAuth\") >= 0 || u.indexOf(\"userDailyCourseContent\") >= 0 || u.indexOf(\"configByKey\") >= 0; }\n  if (window.fetch) {\n    var _f = window.fetch;\n    window.fetch = function () {\n      var u = \"\";\n      try { u = typeof arguments[0] === \"string\" ? arguments[0] : (arguments[0] && arguments[0].url) || \"\"; } catch (e) {}\n      return _f.apply(this, arguments).then(function (r) {\n        if (!want(u)) return r;\n        var ct = r.headers.get(\"content-type\") || \"\";\n        if (ct.indexOf(\"application/json\") < 0) return r;\n        return r.clone().json().then(function (j) {\n          var d = fixResp(j, u);\n          return new Response(JSON.stringify(d), { status: r.status, statusText: r.statusText, headers: r.headers });\n        }).catch(function () { return r; });\n      });\n    };\n  }\n  var _open = XMLHttpRequest.prototype.open;\n  var _send = XMLHttpRequest.prototype.send;\n  XMLHttpRequest.prototype.open = function (m, u) { this.__yc_u = u; return _open.apply(this, arguments); };\n  XMLHttpRequest.prototype.send = function () {\n    var x = this;\n    var u = x.__yc_u || \"\";\n    if (!want(u)) return _send.apply(this, arguments);\n    var _o = x.onreadystatechange;\n    x.onreadystatechange = function () {\n      if (x.readyState === 4 && x.status === 200) {\n        try {\n          var j = JSON.parse(x.responseText);\n          var d = fixResp(j, u);\n          var s = JSON.stringify(d);\n          try { Object.defineProperty(x, \"responseText\", { value: s }); } catch (e) {}\n          try { Object.defineProperty(x, \"response\", { value: s }); } catch (e) {}\n        } catch (e) {}\n      }\n      if (_o) _o.apply(x, arguments);\n    };\n    return _send.apply(this, arguments);\n  };\n})();\n";;;;
     return js;
 }
 static void yc_addExamScript(id ucc) {
@@ -1144,6 +1326,7 @@ static void yc_hookWKWebView(void) {
 
 
 static BOOL yc_hadAuthYes(id self, SEL _cmd, BOOL pay, id topicId, id courseId, NSInteger stageId, NSInteger subjectId, NSInteger semesterId, NSInteger publisherId) {
+    yc_diagLog([NSString stringWithFormat:@"hadAuth pay=%d topic=%@ -> YES", pay, topicId]);
     return YES;
 }
 static void yc_injectVipIntoDict(NSMutableDictionary *d) {
@@ -1180,6 +1363,7 @@ static void yc_recordVipInfo(id self, SEL _cmd, id response) {
                 [sec release];
             }
         }
+        yc_diagLog(@"recordVipInfo injected vip#2-1/vip#3-1");
         response = [m autorelease];
     }
     yc_orig_recordVipInfo(self, _cmd, response);
@@ -1187,6 +1371,7 @@ static void yc_recordVipInfo(id self, SEL _cmd, id response) {
 static void yc_hookVipManager(void) {
     Class vm = objc_getClass("YCVipManager");
     if (!vm) {
+        yc_diagLog(@"hookVipManager class NIL");
         return;
     }
     BOOL a = yc_replace(vm, @selector(hadAuthWithWithPay:topicId:courseId:stageId:subjectId:semesterId:publisherId:), (IMP)yc_hadAuthYes);
@@ -1204,6 +1389,7 @@ static void yc_hookVipManager(void) {
         method_setImplementation(rm, (IMP)yc_recordVipInfo);
         i = YES;
     }
+    yc_diagLog([NSString stringWithFormat:@"hookVipManager hadAuth=%d trial=%d/%d/%d/%d payPost=%d authOK=%d isVip=%d recordVip=%d", a, b, c, d, e, f, g, h, i]);
 }
 static id (*yc_orig_getEncryptBody)(id, SEL, id);
 static id yc_getEncryptBody(id self, SEL _cmd, id response) {
@@ -1222,6 +1408,7 @@ static id yc_getEncryptBody(id self, SEL _cmd, id response) {
             yc_injectVipIntoDict(authCopy);
             m[@"auth"] = authCopy;
             [authCopy release];
+            yc_diagLog(@"decrypt injected vip#2-1/vip#3-1");
             result = [m autorelease];
         }
     }
@@ -1230,23 +1417,31 @@ static id yc_getEncryptBody(id self, SEL _cmd, id response) {
 static void yc_hookDecrypt(void) {
     Class c = objc_getClass("YCMathRequest");
     if (!c) {
+        yc_diagLog(@"hookDecrypt class NIL");
         return;
     }
     Method m = class_getInstanceMethod(c, @selector(getEncryptBodyWithResponse:));
     if (!m) {
+        yc_diagLog(@"hookDecrypt method NIL");
         return;
     }
     yc_orig_getEncryptBody = (id (*)(id, SEL, id))method_getImplementation(m);
     method_setImplementation(m, (IMP)yc_getEncryptBody);
+    yc_diagLog(@"hookDecrypt getEncryptBody=1");
 }
 
 __attribute__((constructor))
 static void yc_init(void) {
+    NSLog(@"[YangCongVipFix] v46 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
+    yc_diagLog([NSString stringWithFormat:@"loaded v46 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        yc_setupDiagButton();
+    });
     yc_hookWKWebView();
     yc_hookVipManager();
     yc_hookDecrypt();
