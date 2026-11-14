@@ -4,8 +4,6 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static void yc_diagLog(NSString *msg);
-static void yc_showDiagMenu(UIButton *btn);
 static NSUInteger yc_tableCount(void);
 
 static void yc_void_noop(id self, SEL _cmd) {}
@@ -74,7 +72,6 @@ static NSString *yc_getToken(void) {
     }
     if ([tok hasPrefix:@"Bearer "]) {
         tok = [tok substringFromIndex:7];
-        yc_diagLog(@"stripped Bearer prefix from token");
     }
     tok = [tok stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     if (tok.length == 0) {
@@ -100,7 +97,6 @@ static NSData *yc_fetchSync(NSString *urlStr, NSString *token, NSTimeInterval ti
         if (d) out = [d retain];
         NSInteger st = 0;
         if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
-        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"fetch %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -135,7 +131,6 @@ static id yc_postJSONSync(NSString *urlStr, NSDictionary *body, NSString *token,
         if (d) out = [d retain];
         NSInteger st = 0;
         if ([r isKindOfClass:[NSHTTPURLResponse class]]) st = [(NSHTTPURLResponse *)r statusCode];
-        if (e || st != 200) yc_diagLog([NSString stringWithFormat:@"post %@ status=%ld err=%@ bytes=%lu", urlStr, (long)st, e ? [e localizedDescription] : @"-", (unsigned long)(d ? d.length : 0)]);
         done = YES;
         dispatch_semaphore_signal(sem);
     }];
@@ -275,7 +270,6 @@ static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
         }
     }
     if (todo.count == 0) return;
-    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch %lu vids", (unsigned long)todo.count]);
     NSUInteger chunk = 500;
     for (NSUInteger start = 0; start < todo.count; start += chunk) {
         NSRange range = NSMakeRange(start, MIN(chunk, todo.count - start));
@@ -287,7 +281,6 @@ static void yc_prefetchVideoIds(NSArray *vids, NSString *token) {
         yc_storeAddressList(resp);
         yc_saveCache();
     }
-    yc_diagLog([NSString stringWithFormat:@"dynamic prefetch done table=%lu", (unsigned long)yc_tableCount()]);
 }
 
 static NSComparisonResult yc_hlsAddrCompare(id a, id b, void *context) {
@@ -342,160 +335,6 @@ static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
     }
     [hls sortUsingFunction:yc_hlsAddrCompare context:NULL];
     return hls;
-}
-
-static NSString *yc_diagFilePath(void) {
-    static NSString *p = nil;
-    static dispatch_once_t once = 0;
-    dispatch_once(&once, ^{
-        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *doc = [dirs firstObject];
-        p = [[doc stringByAppendingPathComponent:@"YangCongVipFix_diag.txt"] retain];
-    });
-    return p;
-}
-
-static void yc_diagLog(NSString *msg) {
-    static NSObject *lock = nil;
-    static dispatch_once_t once = 0;
-    dispatch_once(&once, ^{
-        lock = [[NSObject alloc] init];
-    });
-    @synchronized (lock) {
-        NSString *path = yc_diagFilePath();
-        NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!fh) {
-            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-        } else {
-            [fh seekToEndOfFile];
-            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-            [fh closeFile];
-        }
-    }
-}
-
-static UIWindow *yc_diagWindow = nil;
-
-static void yc_copyDiagOnly(UIButton *btn) {
-    NSString *content = [NSString stringWithContentsOfFile:yc_diagFilePath() encoding:NSUTF8StringEncoding error:NULL];
-    NSUInteger n = content ? content.length : 0;
-    if (n > 0) {
-        [[UIPasteboard generalPasteboard] setString:content];
-    }
-    yc_diagLog([NSString stringWithFormat:@"diag copied %lu bytes", (unsigned long)n]);
-    [btn setTitle:@"已复制✓" forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
-    });
-}
-
-static void yc_clearDiagOnly(UIButton *btn) {
-    [@"" writeToFile:yc_diagFilePath() atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    yc_diagLog(@"diag cleared");
-    [btn setTitle:@"已清空✓" forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
-    });
-}
-
-@interface YCDiagButtonTarget : NSObject
-+ (instancetype)shared;
-- (void)buttonTapped:(id)sender;
-- (void)buttonDragged:(UIPanGestureRecognizer *)g;
-@end
-
-@implementation YCDiagButtonTarget
-+ (instancetype)shared {
-    static YCDiagButtonTarget *s = nil;
-    static dispatch_once_t once = 0;
-    dispatch_once(&once, ^{ s = [[self alloc] init]; });
-    return s;
-}
-- (void)buttonTapped:(id)sender {
-    yc_diagLog(@"diag button tapped");
-    yc_showDiagMenu((UIButton *)sender);
-}
-- (void)buttonDragged:(UIPanGestureRecognizer *)g {
-    if (!yc_diagWindow) return;
-    CGPoint t = [g translationInView:yc_diagWindow];
-    if (g.state == UIGestureRecognizerStateChanged) {
-        CGRect f = yc_diagWindow.frame;
-        f.origin.x += t.x;
-        f.origin.y += t.y;
-        yc_diagWindow.frame = f;
-        [g setTranslation:CGPointMake(0, 0) inView:yc_diagWindow];
-    }
-}
-@end
-
-static void yc_showDiagMenu(UIButton *btn) {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"诊断日志" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    UIAlertAction *copyAction = [UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        yc_copyDiagOnly(btn);
-    }];
-    UIAlertAction *clearAction = [UIAlertAction actionWithTitle:@"清空日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        yc_clearDiagOnly(btn);
-    }];
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil];
-    [alert addAction:copyAction];
-    [alert addAction:clearAction];
-    [alert addAction:cancelAction];
-    UIViewController *vc = nil;
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win == yc_diagWindow) continue;
-        if (win.isKeyWindow) { vc = win.rootViewController; break; }
-    }
-    if (!vc) {
-        for (UIWindow *win in [UIApplication sharedApplication].windows) {
-            if (win == yc_diagWindow) continue;
-            if (win.rootViewController) { vc = win.rootViewController; break; }
-        }
-    }
-    if (!vc) vc = yc_diagWindow.rootViewController;
-    while (vc.presentedViewController) vc = vc.presentedViewController;
-    if (!vc) return;
-    UIPopoverPresentationController *pop = alert.popoverPresentationController;
-    if (pop) {
-        pop.sourceView = vc.view;
-        CGRect r = vc.view.bounds;
-        pop.sourceRect = CGRectMake(r.size.width / 2, r.size.height - 1, 1, 1);
-        pop.permittedArrowDirections = 0;
-    }
-    [vc presentViewController:alert animated:YES completion:nil];
-}
-
-static void yc_setupDiagButton(void) {
-    if (yc_diagWindow) return;
-    UIScreen *scr = [UIScreen mainScreen];
-    CGRect sb = scr.bounds;
-    CGFloat w = 84, h = 32;
-    CGRect fr = CGRectMake(sb.size.width - w - 16, sb.size.height - h - 120, w, h);
-    yc_diagWindow = [[UIWindow alloc] initWithFrame:fr];
-    yc_diagWindow.windowLevel = UIWindowLevelStatusBar + 1;
-    yc_diagWindow.backgroundColor = [UIColor clearColor];
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win.isKeyWindow && win.windowScene) {
-            yc_diagWindow.windowScene = win.windowScene;
-            break;
-        }
-    }
-    yc_diagWindow.hidden = NO;
-    yc_diagWindow.rootViewController = [[[UIViewController alloc] init] autorelease];
-    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-    btn.frame = yc_diagWindow.bounds;
-    btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
-    btn.layer.cornerRadius = 16;
-    btn.clipsToBounds = YES;
-    [btn setTitle:@"📋日志" forState:UIControlStateNormal];
-    btn.titleLabel.font = [UIFont systemFontOfSize:13];
-    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [btn addTarget:[YCDiagButtonTarget shared] action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[YCDiagButtonTarget shared] action:@selector(buttonDragged:)];
-    pan.cancelsTouchesInView = NO;
-    [btn addGestureRecognizer:pan];
-    [pan release];
-    [yc_diagWindow addSubview:btn];
 }
 
 static NSUInteger yc_tableCount(void) {
@@ -564,12 +403,10 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id chapter = yc_fetchJSON(url, token, 8);
         if (chapter) yc_collectVideoIds(chapter, allVids);
     }
-    yc_diagLog([NSString stringWithFormat:@"special chapters done rawVids=%lu", (unsigned long)allVids.count]);
     yc_specialRan = YES;
     yc_specialRawVids = allVids.count;
     if (allVids.count == 0 && yc_capturedToken.length > 0 && ![yc_capturedToken isEqualToString:token] && !yc_specialRetried) {
         yc_specialRetried = YES;
-        yc_diagLog(@"special empty with captured token, retrying prefetch");
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
             @autoreleasepool {
                 NSString *t = yc_getToken();
@@ -586,7 +423,6 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         }
     }
     NSUInteger total = uniq.count;
-    yc_diagLog([NSString stringWithFormat:@"special uniqVids=%lu", (unsigned long)total]);
     NSUInteger chunk = 500;
     for (NSUInteger start = 0; start < total; start += chunk) {
         NSRange range = NSMakeRange(start, MIN(chunk, total - start));
@@ -597,7 +433,6 @@ static void yc_prefetchSpecialCourses(NSString *token) {
         id resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, 20);
         yc_storeAddressList(resp);
         yc_saveCache();
-        yc_diagLog([NSString stringWithFormat:@"special batch %lu table=%lu", (unsigned long)start, (unsigned long)yc_tableCount()]);
     }
     yc_saveCache();
 }
@@ -611,7 +446,6 @@ static void yc_warmUp(void) {
         @autoreleasepool {
             NSString *token = yc_getToken();
             if (token.length == 0) {
-                yc_diagLog([NSString stringWithFormat:@"warmUp tokenEmpty retry=%d", yc_warmRetryCount]);
                 @synchronized (yc_videoAddrs) {
                     yc_warmStarted = NO;
                 }
@@ -623,7 +457,6 @@ static void yc_warmUp(void) {
                 }
                 return;
             }
-            yc_diagLog([NSString stringWithFormat:@"warmUp tokenLen=%lu", (unsigned long)token.length]);
             dispatch_group_t g = dispatch_group_create();
             dispatch_group_enter(g);
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -649,7 +482,6 @@ static void yc_warmUp(void) {
                 yc_warmDone = YES;
                 [yc_notFoundIds removeAllObjects];
             }
-            yc_diagLog([NSString stringWithFormat:@"warmUp done table=%lu", (unsigned long)yc_tableCount()]);
             yc_saveCache();
         }
     });
@@ -660,28 +492,22 @@ static NSArray *yc_resolveViaAddresses(NSString *videoId, NSString *token, NSTim
     id resp = nil;
     for (int attempt = 0; attempt < maxAttempts && !resp; attempt++) {
         resp = yc_postJSONSync(@"https://school-api.yangcong345.com/videos/addresses", body, token, timeout);
-        if (!resp) yc_diagLog([NSString stringWithFormat:@"sync %@ attempt %d respNil", videoId, attempt]);
     }
     if (![resp isKindOfClass:[NSDictionary class]]) {
-        yc_diagLog([NSString stringWithFormat:@"sync %@ respNil", videoId]);
         return nil;
     }
     NSArray *list = resp[@"videoList"];
     if (![list isKindOfClass:[NSArray class]] || list.count == 0) {
-        yc_diagLog([NSString stringWithFormat:@"sync %@ listEmpty", videoId]);
         return [NSArray array];
     }
     id first = list[0];
     if (![first isKindOfClass:[NSDictionary class]]) {
-        yc_diagLog([NSString stringWithFormat:@"sync %@ itemBad", videoId]);
         return [NSArray array];
     }
     NSArray *addrs = first[@"address"];
     if (![addrs isKindOfClass:[NSArray class]] || addrs.count == 0) {
-        yc_diagLog([NSString stringWithFormat:@"sync %@ addrEmpty", videoId]);
         return [NSArray array];
     }
-    yc_diagLog([NSString stringWithFormat:@"sync %@ OK addrs=%lu", videoId, (unsigned long)addrs.count]);
     @synchronized (yc_videoAddrs) {
         yc_videoAddrs[videoId] = addrs;
     }
@@ -701,12 +527,10 @@ static void yc_rescueVideo(NSString *videoId) {
                 if (t.length == 0) return;
                 NSArray *via = yc_resolveViaAddresses(videoId, t, 20, 3);
                 if (via && via.count > 0) {
-                    yc_diagLog([NSString stringWithFormat:@"rescue %@ OK", videoId]);
                     return;
                 }
                 [NSThread sleepForTimeInterval:2];
             }
-            yc_diagLog([NSString stringWithFormat:@"rescue %@ FAIL", videoId]);
         }
     });
 }
@@ -719,7 +543,6 @@ static NSArray *yc_resolveSync(NSString *videoId) {
     }
     NSString *token = yc_getToken();
     if (token.length == 0) {
-        yc_diagLog([NSString stringWithFormat:@"resolve %@ noToken", videoId]);
         return nil;
     }
     NSArray *via = yc_resolveViaAddresses(videoId, token, 8, 1);
@@ -757,7 +580,6 @@ static NSString *yc_pickURL(NSArray *addrs, BOOL isMiddle, BOOL isHLS) {
             if ([a[@"platform"] isEqualToString:want[0]] && [a[@"format"] isEqualToString:want[1]] && [a[@"clarity"] isEqualToString:want[2]]) {
                 NSString *u = a[@"url"];
                 if ([u isKindOfClass:[NSString class]] && u.length > 0) {
-                    yc_diagLog([NSString stringWithFormat:@"pickURL middle=%d hls=%d got %@/%@", isMiddle, isHLS, [a[@"clarity"] description], [a[@"platform"] description]]);
                     return u;
                 }
             }
@@ -817,7 +639,6 @@ static NSArray *yc_getHLSURLs(id self, SEL _cmd) {
             }
         }
         if (out.count > 0) {
-            yc_diagLog([NSString stringWithFormat:@"hlsOrder %@ %@", vid, [cl componentsJoinedByString:@","]]);
             return out;
         }
     }
@@ -831,10 +652,8 @@ static NSArray *yc_lookupAddrs(NSString *vid) {
             addrs = yc_videoAddrs[vid];
         }
         if (addrs) {
-            yc_diagLog([NSString stringWithFormat:@"lookup %@ tableHit addrs=%lu", vid, (unsigned long)addrs.count]);
         } else {
             addrs = yc_resolveSync(vid);
-            yc_diagLog([NSString stringWithFormat:@"lookup %@ syncResult=%@", vid, addrs ? [NSString stringWithFormat:@"OK addrs=%lu", (unsigned long)addrs.count] : @"FAIL"]);
         }
     }
     return addrs;
@@ -1206,7 +1025,6 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
                     }
                 }
                 if (isNew) {
-                    yc_diagLog([NSString stringWithFormat:@"captured token from 7to12 len=%lu", (unsigned long)tok.length]);
                     if (yc_specialRan && yc_specialRawVids == 0 && !yc_specialRetried) {
                         yc_specialRetried = YES;
                         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -1326,7 +1144,6 @@ static void yc_hookWKWebView(void) {
 
 
 static BOOL yc_hadAuthYes(id self, SEL _cmd, BOOL pay, id topicId, id courseId, NSInteger stageId, NSInteger subjectId, NSInteger semesterId, NSInteger publisherId) {
-    yc_diagLog([NSString stringWithFormat:@"hadAuth pay=%d topic=%@ -> YES", pay, topicId]);
     return YES;
 }
 static void yc_injectVipIntoDict(NSMutableDictionary *d) {
@@ -1363,7 +1180,6 @@ static void yc_recordVipInfo(id self, SEL _cmd, id response) {
                 [sec release];
             }
         }
-        yc_diagLog(@"recordVipInfo injected vip#2-1/vip#3-1");
         response = [m autorelease];
     }
     yc_orig_recordVipInfo(self, _cmd, response);
@@ -1371,7 +1187,6 @@ static void yc_recordVipInfo(id self, SEL _cmd, id response) {
 static void yc_hookVipManager(void) {
     Class vm = objc_getClass("YCVipManager");
     if (!vm) {
-        yc_diagLog(@"hookVipManager class NIL");
         return;
     }
     BOOL a = yc_replace(vm, @selector(hadAuthWithWithPay:topicId:courseId:stageId:subjectId:semesterId:publisherId:), (IMP)yc_hadAuthYes);
@@ -1389,7 +1204,6 @@ static void yc_hookVipManager(void) {
         method_setImplementation(rm, (IMP)yc_recordVipInfo);
         i = YES;
     }
-    yc_diagLog([NSString stringWithFormat:@"hookVipManager hadAuth=%d trial=%d/%d/%d/%d payPost=%d authOK=%d isVip=%d recordVip=%d", a, b, c, d, e, f, g, h, i]);
 }
 static id (*yc_orig_getEncryptBody)(id, SEL, id);
 static id yc_getEncryptBody(id self, SEL _cmd, id response) {
@@ -1408,7 +1222,6 @@ static id yc_getEncryptBody(id self, SEL _cmd, id response) {
             yc_injectVipIntoDict(authCopy);
             m[@"auth"] = authCopy;
             [authCopy release];
-            yc_diagLog(@"decrypt injected vip#2-1/vip#3-1");
             result = [m autorelease];
         }
     }
@@ -1417,31 +1230,23 @@ static id yc_getEncryptBody(id self, SEL _cmd, id response) {
 static void yc_hookDecrypt(void) {
     Class c = objc_getClass("YCMathRequest");
     if (!c) {
-        yc_diagLog(@"hookDecrypt class NIL");
         return;
     }
     Method m = class_getInstanceMethod(c, @selector(getEncryptBodyWithResponse:));
     if (!m) {
-        yc_diagLog(@"hookDecrypt method NIL");
         return;
     }
     yc_orig_getEncryptBody = (id (*)(id, SEL, id))method_getImplementation(m);
     method_setImplementation(m, (IMP)yc_getEncryptBody);
-    yc_diagLog(@"hookDecrypt getEncryptBody=1");
 }
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] 正式版 v1.0 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded 正式版 v1.0 cacheTable=%lu", (unsigned long)yc_tableCount()]);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        yc_setupDiagButton();
-    });
     yc_hookWKWebView();
     yc_hookVipManager();
     yc_hookDecrypt();
