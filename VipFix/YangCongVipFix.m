@@ -1111,7 +1111,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
                 [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                     vid, @"id",
                     vid, @"vipId",
-                    @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+                    @"2028-12-31T23:59:59.999Z", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
             }
         }
         sec[@"vip"] = vipList;
@@ -1133,7 +1133,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
             if (!found) {
                 [list addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                     cid, @"courseId", cid, @"packageId", cid, @"id",
-                    @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+                    @"2028-12-31T23:59:59.999Z", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
             }
         }
         sec[@"specialCourse"] = list;
@@ -1153,7 +1153,7 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
             if (!found) {
                 [al addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                     @"yc_all", @"id",
-                    @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+                    @"2028-12-31T23:59:59.999Z", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
             }
             sec[arrKey] = al;
             [al release];
@@ -1324,7 +1324,7 @@ static void yc_injectVipIntoDict(NSMutableDictionary *d) {
             if ([e isKindOfClass:[NSDictionary class]] && ([e[@"id"] isEqualToString:vid] || [e[@"vipId"] isEqualToString:vid])) { found = YES; break; }
         }
         if (!found) {
-            [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:vid, @"id", vid, @"vipId", @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+            [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:vid, @"id", vid, @"vipId", @"2028-12-31T23:59:59.999Z", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
         }
     }
     d[@"vip"] = vipList;
@@ -1375,13 +1375,13 @@ static void yc_hookVipManager(void) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v41 loaded");
+    NSLog(@"[YangCongVipFix] v42 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v41 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v42 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         yc_setupDiagButton();
     });
