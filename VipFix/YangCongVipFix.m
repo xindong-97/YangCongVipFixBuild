@@ -1372,21 +1372,60 @@ static void yc_hookVipManager(void) {
     }
     yc_diagLog([NSString stringWithFormat:@"hookVipManager hadAuth=%d trial=%d/%d/%d/%d payPost=%d authOK=%d isVip=%d recordVip=%d", a, b, c, d, e, f, g, h, i]);
 }
+static id (*yc_orig_getEncryptBody)(id, SEL, id);
+static id yc_getEncryptBody(id self, SEL _cmd, id response) {
+    id result = yc_orig_getEncryptBody(self, _cmd, response);
+    if ([result isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *d = (NSDictionary *)result;
+        id dataSec = d[@"data"];
+        id authSec = d[@"auth"];
+        if ([dataSec isKindOfClass:[NSDictionary class]] && [authSec isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *m = [d mutableCopy];
+            NSMutableDictionary *dataCopy = [dataSec mutableCopy];
+            yc_injectVipIntoDict(dataCopy);
+            m[@"data"] = dataCopy;
+            [dataCopy release];
+            NSMutableDictionary *authCopy = [authSec mutableCopy];
+            yc_injectVipIntoDict(authCopy);
+            m[@"auth"] = authCopy;
+            [authCopy release];
+            yc_diagLog(@"decrypt injected vip#2-1/vip#3-1");
+            result = [m autorelease];
+        }
+    }
+    return result;
+}
+static void yc_hookDecrypt(void) {
+    Class c = objc_getClass("YCMathRequest");
+    if (!c) {
+        yc_diagLog(@"hookDecrypt class NIL");
+        return;
+    }
+    Method m = class_getInstanceMethod(c, @selector(getEncryptBodyWithResponse:));
+    if (!m) {
+        yc_diagLog(@"hookDecrypt method NIL");
+        return;
+    }
+    yc_orig_getEncryptBody = (id (*)(id, SEL, id))method_getImplementation(m);
+    method_setImplementation(m, (IMP)yc_getEncryptBody);
+    yc_diagLog(@"hookDecrypt getEncryptBody=1");
+}
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v42 loaded");
+    NSLog(@"[YangCongVipFix] v43 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v42 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v43 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         yc_setupDiagButton();
     });
     yc_hookWKWebView();
     yc_hookVipManager();
+    yc_hookDecrypt();
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
