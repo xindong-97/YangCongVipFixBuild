@@ -969,11 +969,12 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
             BOOL found = NO;
             for (id e in vipList) {
                 if ([e isKindOfClass:[NSDictionary class]]) {
-                    if ([e[@"vipId"] isEqualToString:vid]) { found = YES; break; }
+                    if ([e[@"id"] isEqualToString:vid] || [e[@"vipId"] isEqualToString:vid]) { found = YES; break; }
                 }
             }
             if (!found) {
                 [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                    vid, @"id",
                     vid, @"vipId",
                     @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
             }
@@ -1185,10 +1186,10 @@ static void yc_injectVipIntoDict(NSMutableDictionary *d) {
     for (NSString *vid in [NSArray arrayWithObjects:@"vip#2-1", @"vip#3-1", nil]) {
         BOOL found = NO;
         for (id e in vipList) {
-            if ([e isKindOfClass:[NSDictionary class]] && [e[@"vipId"] isEqualToString:vid]) { found = YES; break; }
+            if ([e isKindOfClass:[NSDictionary class]] && ([e[@"id"] isEqualToString:vid] || [e[@"vipId"] isEqualToString:vid])) { found = YES; break; }
         }
         if (!found) {
-            [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:vid, @"vipId", @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+            [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:vid, @"id", vid, @"vipId", @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
         }
     }
     d[@"vip"] = vipList;
@@ -1233,13 +1234,13 @@ static void yc_hookVipManager(void) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v36 loaded");
+    NSLog(@"[YangCongVipFix] v37 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v36 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v37 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     yc_hookWKWebView();
     yc_hookVipManager();
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
