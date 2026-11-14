@@ -5,6 +5,7 @@
 #import <objc/message.h>
 
 static void yc_diagLog(NSString *msg);
+static void yc_showDiagMenu(UIButton *btn);
 static NSUInteger yc_tableCount(void);
 
 static void yc_void_noop(id self, SEL _cmd) {}
@@ -374,15 +375,26 @@ static void yc_diagLog(NSString *msg) {
 
 static UIWindow *yc_diagWindow = nil;
 
-static void yc_copyAndClearDiag(void) {
-    NSString *path = yc_diagFilePath();
-    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+static void yc_copyDiagOnly(UIButton *btn) {
+    NSString *content = [NSString stringWithContentsOfFile:yc_diagFilePath() encoding:NSUTF8StringEncoding error:NULL];
     NSUInteger n = content ? content.length : 0;
     if (n > 0) {
         [[UIPasteboard generalPasteboard] setString:content];
     }
-    [@"" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    yc_diagLog([NSString stringWithFormat:@"diag copied %lu bytes, cleared", (unsigned long)n]);
+    yc_diagLog([NSString stringWithFormat:@"diag copied %lu bytes", (unsigned long)n]);
+    [btn setTitle:@"已复制✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
+    });
+}
+
+static void yc_clearDiagOnly(UIButton *btn) {
+    [@"" writeToFile:yc_diagFilePath() atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    yc_diagLog(@"diag cleared");
+    [btn setTitle:@"已清空✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [btn setTitle:@"📋日志" forState:UIControlStateNormal];
+    });
 }
 
 @interface YCDiagButtonTarget : NSObject
@@ -399,12 +411,7 @@ static void yc_copyAndClearDiag(void) {
     return s;
 }
 - (void)buttonTapped:(id)sender {
-    yc_copyAndClearDiag();
-    UIButton *btn = (UIButton *)sender;
-    [btn setTitle:@"已复制✓" forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        [btn setTitle:@"📋清日志" forState:UIControlStateNormal];
-    });
+    yc_showDiagMenu((UIButton *)sender);
 }
 - (void)buttonDragged:(UIPanGestureRecognizer *)g {
     if (!yc_diagWindow) return;
@@ -418,6 +425,34 @@ static void yc_copyAndClearDiag(void) {
     }
 }
 @end
+
+static void yc_showDiagMenu(UIButton *btn) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"诊断日志" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    UIAlertAction *copyAction = [UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        yc_copyDiagOnly(btn);
+    }];
+    UIAlertAction *clearAction = [UIAlertAction actionWithTitle:@"清空日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        yc_clearDiagOnly(btn);
+    }];
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil];
+    [alert addAction:copyAction];
+    [alert addAction:clearAction];
+    [alert addAction:cancelAction];
+    UIViewController *vc = nil;
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win.isKeyWindow) { vc = win.rootViewController; break; }
+    }
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    if (!vc) return;
+    UIPopoverPresentationController *pop = alert.popoverPresentationController;
+    if (pop) {
+        pop.sourceView = vc.view;
+        CGRect r = vc.view.bounds;
+        pop.sourceRect = CGRectMake(r.size.width / 2, r.size.height - 1, 1, 1);
+        pop.permittedArrowDirections = 0;
+    }
+    [vc presentViewController:alert animated:YES completion:nil];
+}
 
 static void yc_setupDiagButton(void) {
     if (yc_diagWindow) return;
@@ -440,7 +475,7 @@ static void yc_setupDiagButton(void) {
     btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
     btn.layer.cornerRadius = 16;
     btn.clipsToBounds = YES;
-    [btn setTitle:@"📋清日志" forState:UIControlStateNormal];
+    [btn setTitle:@"📋日志" forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont systemFontOfSize:13];
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [btn addTarget:[YCDiagButtonTarget shared] action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -1321,13 +1356,13 @@ static void yc_hookVipManager(void) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v38 loaded");
+    NSLog(@"[YangCongVipFix] v39 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v38 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v39 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         yc_setupDiagButton();
     });
