@@ -1169,16 +1169,79 @@ static void yc_hookWKWebView(void) {
     }
 }
 
+
+static BOOL yc_hadAuthYes(id self, SEL _cmd, BOOL pay, id topicId, id courseId, NSInteger stageId, NSInteger subjectId, NSInteger semesterId, NSInteger publisherId) {
+    yc_diagLog([NSString stringWithFormat:@"hadAuth pay=%d topic=%@ -> YES", pay, topicId]);
+    return YES;
+}
+static void yc_injectVipIntoDict(NSMutableDictionary *d) {
+    id vipArr = d[@"vip"];
+    NSMutableArray *vipList = nil;
+    if ([vipArr isKindOfClass:[NSArray class]]) {
+        vipList = [vipArr mutableCopy];
+    } else {
+        vipList = [[NSMutableArray alloc] init];
+    }
+    for (NSString *vid in [NSArray arrayWithObjects:@"vip#2-1", @"vip#3-1", nil]) {
+        BOOL found = NO;
+        for (id e in vipList) {
+            if ([e isKindOfClass:[NSDictionary class]] && [e[@"vipId"] isEqualToString:vid]) { found = YES; break; }
+        }
+        if (!found) {
+            [vipList addObject:[NSDictionary dictionaryWithObjectsAndKeys:vid, @"vipId", @"2028-12-31", @"expireTime", [NSNumber numberWithBool:NO], @"expired", nil]];
+        }
+    }
+    d[@"vip"] = vipList;
+    [vipList release];
+}
+static void (*yc_orig_recordVipInfo)(id, SEL, id);
+static void yc_recordVipInfo(id self, SEL _cmd, id response) {
+    if ([response isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *m = [response mutableCopy];
+        yc_injectVipIntoDict(m);
+        for (NSString *key in [NSArray arrayWithObjects:@"data", @"auth", nil]) {
+            id section = m[key];
+            if ([section isKindOfClass:[NSDictionary class]]) {
+                NSMutableDictionary *sec = [section mutableCopy];
+                yc_injectVipIntoDict(sec);
+                m[key] = sec;
+                [sec release];
+            }
+        }
+        yc_diagLog(@"recordVipInfo injected vip#2-1/vip#3-1");
+        response = [m autorelease];
+    }
+    yc_orig_recordVipInfo(self, _cmd, response);
+}
+static void yc_hookVipManager(void) {
+    Class vm = objc_getClass("YCVipManager");
+    if (!vm) return;
+    yc_replace(vm, @selector(hadAuthWithWithPay:topicId:courseId:stageId:subjectId:semesterId:publisherId:), (IMP)yc_hadAuthYes);
+    yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:courseId:stageId:subjectId:semesterId:publisherId:), YES);
+    yc_replaceBool(vm, @selector(hadAuthTrialWithTopicId:), YES);
+    yc_replaceBool(vm, @selector(hadAuthTrialWithCourseId:), YES);
+    yc_replaceBool(vm, @selector(hadAuthTrialWithStageId:subjectId:semesterId:publisherId:), YES);
+    yc_replaceBool(vm, @selector(isShowPaymentPostWithTopicId:isPay:stageId:subjectId:semesterId:publisherId:), NO);
+    yc_replaceBool(vm, @selector(isAuthSuccessWithCourseId:), YES);
+    yc_replaceBool(vm, @selector(returnUserIsVip), YES);
+    Method rm = class_getInstanceMethod(vm, @selector(recordVipInfoWithResponseObject:));
+    if (rm) {
+        yc_orig_recordVipInfo = (void *)method_getImplementation(rm);
+        method_setImplementation(rm, (IMP)yc_recordVipInfo);
+    }
+}
+
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v35 loaded");
+    NSLog(@"[YangCongVipFix] v36 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v35 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v36 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     yc_hookWKWebView();
+    yc_hookVipManager();
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
