@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build dylib
         run: |
-          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -o VipFix/YangCongVipFix.dylib VipFix/YangCongVipFix.m
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -miphoneos-version-min=13.0 -framework Foundation -framework UIKit -framework WebKit -o VipFix/YangCongVipFix.dylib VipFix/YangCongVipFix.m
           ls -lh VipFix/YangCongVipFix.dylib
           file VipFix/YangCongVipFix.dylib
       - name: Upload dylib
