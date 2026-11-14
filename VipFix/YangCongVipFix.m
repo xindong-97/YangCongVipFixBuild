@@ -414,7 +414,7 @@ static void yc_copyAndClearDiag(void) {
         f.origin.x += t.x;
         f.origin.y += t.y;
         yc_diagWindow.frame = f;
-        [g setTranslation:CGPointZero inView:yc_diagWindow];
+        [g setTranslation:CGPointMake(0, 0) inView:yc_diagWindow];
     }
 }
 @end
