@@ -411,6 +411,7 @@ static void yc_clearDiagOnly(UIButton *btn) {
     return s;
 }
 - (void)buttonTapped:(id)sender {
+    yc_diagLog(@"diag button tapped");
     yc_showDiagMenu((UIButton *)sender);
 }
 - (void)buttonDragged:(UIPanGestureRecognizer *)g {
@@ -440,8 +441,16 @@ static void yc_showDiagMenu(UIButton *btn) {
     [alert addAction:cancelAction];
     UIViewController *vc = nil;
     for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win == yc_diagWindow) continue;
         if (win.isKeyWindow) { vc = win.rootViewController; break; }
     }
+    if (!vc) {
+        for (UIWindow *win in [UIApplication sharedApplication].windows) {
+            if (win == yc_diagWindow) continue;
+            if (win.rootViewController) { vc = win.rootViewController; break; }
+        }
+    }
+    if (!vc) vc = yc_diagWindow.rootViewController;
     while (vc.presentedViewController) vc = vc.presentedViewController;
     if (!vc) return;
     UIPopoverPresentationController *pop = alert.popoverPresentationController;
@@ -470,6 +479,7 @@ static void yc_setupDiagButton(void) {
         }
     }
     yc_diagWindow.hidden = NO;
+    yc_diagWindow.rootViewController = [[[UIViewController alloc] init] autorelease];
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     btn.frame = yc_diagWindow.bounds;
     btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
@@ -480,6 +490,7 @@ static void yc_setupDiagButton(void) {
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [btn addTarget:[YCDiagButtonTarget shared] action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[YCDiagButtonTarget shared] action:@selector(buttonDragged:)];
+    pan.cancelsTouchesInView = NO;
     [btn addGestureRecognizer:pan];
     [pan release];
     [yc_diagWindow addSubview:btn];
@@ -1356,13 +1367,13 @@ static void yc_hookVipManager(void) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v39 loaded");
+    NSLog(@"[YangCongVipFix] v40 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v39 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v40 cacheTable=%lu", (unsigned long)yc_tableCount()]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         yc_setupDiagButton();
     });
