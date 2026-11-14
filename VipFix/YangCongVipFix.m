@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -324,6 +325,17 @@ static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
         }
     }
     if (hls.count == 0) return addrs;
+    NSMutableSet *have = [NSMutableSet set];
+    for (id a in hls) [have addObject:[[a[@"clarity"] description] lowercaseString]];
+    for (id a in addrs) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        if (![[a[@"format"] description] isEqualToString:@"hls"]) continue;
+        NSString *c = [[a[@"clarity"] description] lowercaseString];
+        if (![have containsObject:c]) {
+            [hls addObject:a];
+            [have addObject:c];
+        }
+    }
     [hls sortUsingFunction:yc_hlsAddrCompare context:NULL];
     return hls;
 }
@@ -575,7 +587,7 @@ static NSArray *yc_resolveSync(NSString *videoId) {
         yc_diagLog([NSString stringWithFormat:@"resolve %@ noToken", videoId]);
         return nil;
     }
-    NSArray *via = yc_resolveViaAddresses(videoId, token, 10, 2);
+    NSArray *via = yc_resolveViaAddresses(videoId, token, 8, 1);
     if (via && via.count > 0) return via;
     if (via) {
         @synchronized (yc_videoAddrs) {
@@ -1110,15 +1122,63 @@ static NSData *yc_rewriteUserAuth(NSData *data) {
 
 @end
 
+
+static NSString *yc_examJS(void) {
+    static NSString *js = nil;
+    if (!js) js = @"(function () {\n  if (window.__yc_exam_fix) return;\n  window.__yc_exam_fix = true;\n  function walk(o) {\n    if (!o || typeof o !== \"object\") return;\n    if (o instanceof Array) { for (var i = 0; i < o.length; i++) walk(o[i]); return; }\n    if (\"payType\" in o) { o.payType = \"free\"; o.pay = false; o.bigVip = false; o.payPage = \"\"; }\n    for (var k in o) walk(o[k]);\n  }\n  function fixAuth(j) {\n    if (!j) return j;\n    if (j.ids && j.ids instanceof Array && j.ids.length === 0) j.ids = [\"__yc_all__\"];\n    if (j.data && j.data.ids && j.data.ids instanceof Array && j.data.ids.length === 0) j.data.ids = [\"__yc_all__\"];\n    return j;\n  }\n  function fixDown(j) {\n    if (!j) return j;\n    if (typeof j.auth !== \"undefined\") j.auth = true;\n    if (j.data && typeof j.data.auth !== \"undefined\") j.data.auth = true;\n    return j;\n  }\n  function fixResp(j, url) {\n    if (url.indexOf(\"/study-practice/examination/auth\") >= 0) return fixAuth(j);\n    if (url.indexOf(\"/study-practice/examination/down/auth\") >= 0) return fixDown(j);\n    if (url.indexOf(\"/study-practice/examination\") >= 0) { walk(j); return j; }\n    return j;\n  }\n  if (window.fetch) {\n    var _f = window.fetch;\n    window.fetch = function () {\n      var u = \"\";\n      try { u = typeof arguments[0] === \"string\" ? arguments[0] : (arguments[0] && arguments[0].url) || \"\"; } catch (e) {}\n      return _f.apply(this, arguments).then(function (r) {\n        if (u.indexOf(\"study-practice/examination\") < 0) return r;\n        var ct = r.headers.get(\"content-type\") || \"\";\n        if (ct.indexOf(\"application/json\") < 0) return r;\n        return r.clone().json().then(function (j) {\n          var d = fixResp(j, u);\n          return new Response(JSON.stringify(d), { status: r.status, statusText: r.statusText, headers: r.headers });\n        }).catch(function () { return r; });\n      });\n    };\n  }\n  var _open = XMLHttpRequest.prototype.open;\n  var _send = XMLHttpRequest.prototype.send;\n  XMLHttpRequest.prototype.open = function (m, u) { this.__yc_u = u; return _open.apply(this, arguments); };\n  XMLHttpRequest.prototype.send = function () {\n    var x = this;\n    var u = x.__yc_u || \"\";\n    if (u.indexOf(\"study-practice/examination\") < 0) return _send.apply(this, arguments);\n    var _o = x.onreadystatechange;\n    x.onreadystatechange = function () {\n      if (x.readyState === 4 && x.status === 200) {\n        try {\n          var j = JSON.parse(x.responseText);\n          var d = fixResp(j, u);\n          var s = JSON.stringify(d);\n          try { Object.defineProperty(x, \"responseText\", { value: s }); } catch (e) {}\n          try { Object.defineProperty(x, \"response\", { value: s }); } catch (e) {}\n        } catch (e) {}\n      }\n      if (_o) _o.apply(x, arguments);\n    };\n    return _send.apply(this, arguments);\n  };\n})();\n";
+    return js;
+}
+static void yc_addExamScript(id ucc) {
+    if (!ucc) return;
+    Class usCls = objc_getClass("WKUserScript");
+    if (!usCls) return;
+    id script = [usCls alloc];
+    script = [script initWithSource:yc_examJS() injectionTime:0 forMainFrameOnly:NO];
+    [ucc addUserScript:script];
+    [script release];
+}
+static id (*yc_orig_WKWebView_initFrame)(id, SEL, CGRect, id);
+static id yc_WKWebView_initFrame(id self, SEL _cmd, CGRect frame, id config) {
+    if (config) {
+        id ucc = [config userContentController];
+        yc_addExamScript(ucc);
+    }
+    return yc_orig_WKWebView_initFrame(self, _cmd, frame, config);
+}
+static id (*yc_orig_WKWebView_initCoder)(id, SEL, id);
+static id yc_WKWebView_initCoder(id self, SEL _cmd, id coder) {
+    id ret = yc_orig_WKWebView_initCoder(self, _cmd, coder);
+    if (ret) {
+        id config = [ret configuration];
+        if (config) yc_addExamScript([config userContentController]);
+    }
+    return ret;
+}
+static void yc_hookWKWebView(void) {
+    Class wk = objc_getClass("WKWebView");
+    if (!wk) return;
+    Method m1 = class_getInstanceMethod(wk, @selector(initWithFrame:configuration:));
+    if (m1) {
+        yc_orig_WKWebView_initFrame = (void *)method_getImplementation(m1);
+        method_setImplementation(m1, (IMP)yc_WKWebView_initFrame);
+    }
+    Method m2 = class_getInstanceMethod(wk, @selector(initWithCoder:));
+    if (m2) {
+        yc_orig_WKWebView_initCoder = (void *)method_getImplementation(m2);
+        method_setImplementation(m2, (IMP)yc_WKWebView_initCoder);
+    }
+}
+
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v34 loaded");
+    NSLog(@"[YangCongVipFix] v35 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v34 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v35 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_hookWKWebView();
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
     if (vip) {
         yc_replace(vip, @selector(fireAuthCheck:isPlayEnd:), (IMP)yc_fireAuthYes);
