@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -340,17 +341,25 @@ static NSArray *yc_sortedHLSAddrs(NSArray *addrs) {
     return hls;
 }
 
-static void yc_diagLog(NSString *msg) {
-    static NSString *path = nil;
-    static NSObject *lock = nil;
+static NSString *yc_diagFilePath(void) {
+    static NSString *p = nil;
     static dispatch_once_t once = 0;
     dispatch_once(&once, ^{
         NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *doc = [dirs firstObject];
-        path = [[doc stringByAppendingPathComponent:@"YangCongVipFix_diag.txt"] retain];
+        p = [[doc stringByAppendingPathComponent:@"YangCongVipFix_diag.txt"] retain];
+    });
+    return p;
+}
+
+static void yc_diagLog(NSString *msg) {
+    static NSObject *lock = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{
         lock = [[NSObject alloc] init];
     });
     @synchronized (lock) {
+        NSString *path = yc_diagFilePath();
         NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
         if (!fh) {
@@ -361,6 +370,84 @@ static void yc_diagLog(NSString *msg) {
             [fh closeFile];
         }
     }
+}
+
+static UIWindow *yc_diagWindow = nil;
+
+static void yc_copyAndClearDiag(void) {
+    NSString *path = yc_diagFilePath();
+    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+    NSUInteger n = content ? content.length : 0;
+    if (n > 0) {
+        [[UIPasteboard generalPasteboard] setString:content];
+    }
+    [@"" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    yc_diagLog([NSString stringWithFormat:@"diag copied %lu bytes, cleared", (unsigned long)n]);
+}
+
+@interface YCDiagButtonTarget : NSObject
++ (instancetype)shared;
+- (void)buttonTapped:(id)sender;
+- (void)buttonDragged:(UIPanGestureRecognizer *)g;
+@end
+
+@implementation YCDiagButtonTarget
++ (instancetype)shared {
+    static YCDiagButtonTarget *s = nil;
+    static dispatch_once_t once = 0;
+    dispatch_once(&once, ^{ s = [[self alloc] init]; });
+    return s;
+}
+- (void)buttonTapped:(id)sender {
+    yc_copyAndClearDiag();
+    UIButton *btn = (UIButton *)sender;
+    [btn setTitle:@"已复制✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [btn setTitle:@"📋清日志" forState:UIControlStateNormal];
+    });
+}
+- (void)buttonDragged:(UIPanGestureRecognizer *)g {
+    if (!yc_diagWindow) return;
+    CGPoint t = [g translationInView:yc_diagWindow];
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGRect f = yc_diagWindow.frame;
+        f.origin.x += t.x;
+        f.origin.y += t.y;
+        yc_diagWindow.frame = f;
+        [g setTranslation:CGPointZero inView:yc_diagWindow];
+    }
+}
+@end
+
+static void yc_setupDiagButton(void) {
+    if (yc_diagWindow) return;
+    UIScreen *scr = [UIScreen mainScreen];
+    CGRect sb = scr.bounds;
+    CGFloat w = 84, h = 32;
+    CGRect fr = CGRectMake(sb.size.width - w - 16, sb.size.height - h - 120, w, h);
+    yc_diagWindow = [[UIWindow alloc] initWithFrame:fr];
+    yc_diagWindow.windowLevel = UIWindowLevelStatusBar + 1;
+    yc_diagWindow.backgroundColor = [UIColor clearColor];
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win.isKeyWindow && win.windowScene) {
+            yc_diagWindow.windowScene = win.windowScene;
+            break;
+        }
+    }
+    yc_diagWindow.hidden = NO;
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.frame = yc_diagWindow.bounds;
+    btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
+    btn.layer.cornerRadius = 16;
+    btn.clipsToBounds = YES;
+    [btn setTitle:@"📋清日志" forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [btn addTarget:[YCDiagButtonTarget shared] action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[YCDiagButtonTarget shared] action:@selector(buttonDragged:)];
+    [btn addGestureRecognizer:pan];
+    [pan release];
+    [yc_diagWindow addSubview:btn];
 }
 
 static NSUInteger yc_tableCount(void) {
@@ -1234,13 +1321,16 @@ static void yc_hookVipManager(void) {
 
 __attribute__((constructor))
 static void yc_init(void) {
-    NSLog(@"[YangCongVipFix] v37 loaded");
+    NSLog(@"[YangCongVipFix] v38 loaded");
     [NSURLProtocol registerClass:[YCInterceptProtocol class]];
     yc_suppressNewUserGift();
     yc_videoAddrs = [[NSMutableDictionary alloc] init];
     yc_notFoundIds = [[NSMutableSet alloc] init];
     yc_loadCache();
-    yc_diagLog([NSString stringWithFormat:@"loaded v37 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    yc_diagLog([NSString stringWithFormat:@"loaded v38 cacheTable=%lu", (unsigned long)yc_tableCount()]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        yc_setupDiagButton();
+    });
     yc_hookWKWebView();
     yc_hookVipManager();
     Class vip = objc_getClass("YCPlayerBusinessVipManagerPlugin");
